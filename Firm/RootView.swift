@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var tab = "today"
     @State private var approved: Bool? = nil        // nil = checking
     @State private var code: String? = nil
+    @State private var showTabs = true
     @Environment(\.scenePhase) private var phase
     private let tabs: [(String, String, String)] = [
         ("today", "Today", "house.fill"), ("team", "Team", "person.2.fill"), ("shop", "Shop", "bag.fill"),
@@ -17,11 +18,14 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            WebScreen(holder: web).ignoresSafeArea()
-            GlassTabBar(tabs: tabs, selected: $tab) { key in
-                web.view?.evaluateJavaScript("go('\(key)')", completionHandler: nil)
+            WebScreen(holder: web, showTabs: $showTabs).ignoresSafeArea()
+            if showTabs {
+                GlassTabBar(tabs: tabs, selected: $tab) { key in
+                    web.view?.evaluateJavaScript("go('\(key)')", completionHandler: nil)
+                }
+                .padding(.horizontal, 16).padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .padding(.horizontal, 16).padding(.bottom, 10)
             if approved == false { ApproveScreen(code: code, retry: pair).transition(.opacity) }
             if locked { LockScreen(unlock: authenticate).transition(.opacity) }
         }
