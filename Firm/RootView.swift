@@ -12,9 +12,7 @@ struct RootView: View {
         TabView(selection: $tab) {
             Tab("Today", systemImage: "house.fill", value: "today") { nav { TodayView() } }
             Tab("Team", systemImage: "person.2.fill", value: "team") { nav { TeamView() } }
-            Tab("Shop", systemImage: "bag.fill", value: "shop") { nav { ShopView() } }
-            Tab("Pipeline", systemImage: "arrow.triangle.branch", value: "pipeline") { nav { PipelineView() } }
-            Tab("Money", systemImage: "chart.line.uptrend.xyaxis", value: "money") { nav { MoneyView() } }
+            Tab("Business", systemImage: "chart.line.uptrend.xyaxis", value: "business") { nav { BusinessView() } }
             Tab("Manage", systemImage: "gearshape.fill", value: "manage") { nav { ManageView() } }
         }
         .environmentObject(store)

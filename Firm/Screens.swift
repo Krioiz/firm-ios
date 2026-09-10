@@ -118,7 +118,7 @@ struct ShopView: View {
                     }
                 }
             }
-        }.navigationTitle("Shop")
+        }
     }
 }
 struct IdeaRow: View {
@@ -149,9 +149,7 @@ struct ProductGrid: View {
                 NavigationLink(value: p) {
                     VStack(alignment: .leading, spacing: 0) {
                         if let u = p.images?.first, let url = URL(string: Store.base.replacingOccurrences(of: "/dashboard", with: "") + u) {
-                            AsyncImage(url: url) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                            placeholder: { Rectangle().fill(Color.secondary.opacity(0.12)) }
-                            .frame(height: 120).clipped()
+                            CachedImage(url: url).frame(height: 120).clipped()
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(p.title ?? "").font(.system(size: 14, weight: .semibold)).lineLimit(1)
@@ -178,9 +176,8 @@ struct ProductDetail: View {
                         HStack(spacing: 12) {
                             ForEach(imgs, id: \.self) { u in
                                 if let url = URL(string: Store.base.replacingOccurrences(of: "/dashboard", with: "") + u) {
-                                    AsyncImage(url: url) { img in img.resizable().aspectRatio(contentMode: .fit) }
-                                    placeholder: { Rectangle().fill(Color.secondary.opacity(0.12)).frame(width: 200) }
-                                    .frame(height: 260).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    CachedImage(url: url, contentMode: .fit)
+                                        .frame(height: 260).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 }
                             }
                         }.padding(.vertical, 6)
@@ -218,77 +215,6 @@ struct ListingDetail: View {
                 Section { Link("Open on Etsy", destination: url) }
             }
         }.navigationTitle("Listing").navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// ---- Pipeline ------------------------------------------------------------------------
-struct PipelineView: View {
-    @EnvironmentObject var store: Store
-    @State private var stage = 0
-    var body: some View {
-        let stages = store.pipeline?.stages ?? []
-        let stuck = stages.flatMap { $0.cards ?? [] }.filter { $0.stuck == true }
-        VStack(spacing: 0) {
-            if !stages.isEmpty {
-                HStack(spacing: 0) {
-                    ForEach(Array(stages.enumerated()), id: \.offset) { i, s in
-                        let n = (s.cards ?? []).count
-                        let bad = (s.cards ?? []).contains { $0.stuck == true }
-                        Button {
-                            stage = i; UISelectionFeedbackGenerator().selectionChanged()
-                        } label: {
-                            VStack(spacing: 6) {
-                                ZStack {
-                                    Circle().fill(bad ? Color.red : n > 0 ? Color.accentColor : Color.secondary.opacity(0.18))
-                                    if n > 0 { Text("\(n)").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white) }
-                                }
-                                .frame(width: 30, height: 30)
-                                .overlay(Circle().stroke(Color.primary, lineWidth: i == stage ? 2 : 0).padding(-3))
-                                .scaleEffect(i == stage ? 1.1 : 1)
-                                Text(name(s)).font(.system(size: 10.5, weight: i == stage ? .semibold : .regular))
-                                    .foregroundStyle(i == stage ? .primary : .secondary).lineLimit(1)
-                            }.frame(maxWidth: .infinity)
-                        }.buttonStyle(.plain)
-                        if i < stages.count - 1 {
-                            Rectangle().fill(n > 0 ? Color.accentColor : Color.secondary.opacity(0.18))
-                                .frame(width: 10, height: 2).offset(y: -13)
-                        }
-                    }
-                }.padding(.horizontal, 12).padding(.top, 6).animation(.spring(duration: 0.3), value: stage)
-            }
-            List {
-                if stages.indices.contains(stage) {
-                    let s = stages[stage]
-                    Section(header: Text(name(s)), footer: Text(note(s))) {
-                        let cards = s.cards ?? []
-                        if cards.isEmpty { Text("Nothing at this stage").foregroundStyle(.secondary) }
-                        else { ForEach(cards) { CardRow(c: $0) } }
-                    }
-                }
-                if !stuck.isEmpty {
-                    Section("Needs a push · \(stuck.count)") { ForEach(stuck) { CardRow(c: $0) } }
-                }
-            }
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Pipeline")
-        .overlay { if stages.isEmpty && store.loaded { ContentUnavailableView("Nothing in the pipeline", systemImage: "arrow.triangle.branch") } }
-    }
-    private func name(_ s: Stage) -> String { String((s.label ?? s.key ?? "").split(separator: "—").first ?? "").trimmingCharacters(in: .whitespaces) }
-    private func note(_ s: Stage) -> String { (s.label ?? "").contains("—") ? String((s.label ?? "").split(separator: "—")[1]).trimmingCharacters(in: .whitespaces) : "" }
-}
-struct CardRow: View {
-    let c: Card
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(c.title ?? "").font(.system(size: 16, weight: .medium))
-            Text("\(c.holder ?? "—")\(c.days_in_stage != nil ? " · \(c.days_in_stage!) day\(c.days_in_stage == 1 ? "" : "s") here" : "")")
-                .font(.system(size: 13)).foregroundStyle(.secondary)
-            if c.stuck == true { Pill(text: "Stuck — nobody has moved this", tint: .red) }
-            else if let v = c.verdict { Pill(text: v, tint: .blue) }
-        }
-        .padding(.vertical, 3)
-        .overlay(alignment: .leading) { if c.stuck == true { Rectangle().fill(.red).frame(width: 3).offset(x: -16) } }
     }
 }
 
