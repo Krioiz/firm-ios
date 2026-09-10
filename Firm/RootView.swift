@@ -1,73 +1,75 @@
 import SwiftUI
-import WebKit
 import LocalAuthentication
 
-// The web dashboard inside a native shell: Face ID on the door, a real Liquid Glass
-// tab bar, and a bridge for haptics. The page hides its own tab bar when it sees us.
 struct RootView: View {
-    @StateObject private var web = WebHolder()
+    @StateObject private var store = Store()
     @State private var locked = true
     @State private var tab = "today"
-    @State private var approved: Bool? = nil        // nil = checking
-    @State private var code: String? = nil
-    @State private var showTabs = true
+    @AppStorage("theme") private var theme = "system"
     @Environment(\.scenePhase) private var phase
-    private let tabs: [(String, String, String)] = [
-        ("today", "Today", "house.fill"), ("team", "Team", "person.2.fill"), ("shop", "Shop", "bag.fill"),
-        ("pipeline", "Pipeline", "arrow.triangle.branch"), ("money", "Money", "chart.line.uptrend.xyaxis"), ("manage", "Manage", "gearshape.fill")]
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            WebScreen(holder: web, showTabs: $showTabs).ignoresSafeArea()
-            if showTabs {
-                GlassTabBar(tabs: tabs, selected: $tab) { key in
-                    web.view?.evaluateJavaScript("go('\(key)')", completionHandler: nil)
-                }
-                .padding(.horizontal, 16).padding(.bottom, 10)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            if approved == false { ApproveScreen(code: code, retry: pair).transition(.opacity) }
-            if locked { LockScreen(unlock: authenticate).transition(.opacity) }
+        TabView(selection: $tab) {
+            Tab("Today", systemImage: "house.fill", value: "today") { nav { TodayView() } }
+            Tab("Team", systemImage: "person.2.fill", value: "team") { nav { TeamView() } }
+            Tab("Shop", systemImage: "bag.fill", value: "shop") { nav { ShopView() } }
+            Tab("Pipeline", systemImage: "arrow.triangle.branch", value: "pipeline") { nav { PipelineView() } }
+            Tab("Money", systemImage: "chart.line.uptrend.xyaxis", value: "money") { nav { MoneyView() } }
+            Tab("Manage", systemImage: "gearshape.fill", value: "manage") { nav { ManageView() } }
         }
-        .onAppear { authenticate(); Alerts.shared.start(); pair() }
-        .onChange(of: phase) { p in if p == .background { locked = true; Alerts.shared.schedule() } else if p == .active { if locked { authenticate() }; Alerts.shared.refresh { } } }
+        .environmentObject(store)
+        .preferredColorScheme(theme == "light" ? .light : theme == "dark" ? .dark : nil)
+        .task { await store.refresh() }
+        .overlay { if store.needsApproval && !locked { ApproveScreen(code: store.pairingCode) } }
+        .overlay { if locked { LockScreen(unlock: authenticate) } }
+        .task(id: store.needsApproval) {
+            while store.needsApproval { try? await Task.sleep(for: .seconds(3)); await store.refresh() }
+        }
+        .onAppear(perform: authenticate)
+        .onChange(of: phase) { _, p in
+            if p == .background { locked = true }
+            else if p == .active { if locked { authenticate() } else { Task { await store.refresh() } } }
+        }
+        .onChange(of: tab) { _, _ in UISelectionFeedbackGenerator().selectionChanged() }
     }
 
-    // Establish a session with the device secret; if this phone is not approved yet,
-    // show a code for Marco to enter in the web app, then keep checking.
-    private func pair() {
-        DeviceAuth.session { ok in
-            DispatchQueue.main.async {
-                if ok { approved = true; web.view?.load(URLRequest(url: URL(string: "https://getstubbie.com/dashboard/app/")!)); return }
-                approved = false
-                if code == nil { DeviceAuth.requestCode { c in DispatchQueue.main.async { code = c } } }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if approved == false { pair() } }
-            }
+    // one navigation stack per tab, with every detail screen it can push
+    @ViewBuilder private func nav<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        NavigationStack {
+            content()
+                .navigationDestination(for: Agent.self) { AgentDetail(a: $0) }
+                .navigationDestination(for: Bet.self) { BetDetail(b: $0) }
+                .navigationDestination(for: Product.self) { ProductDetail(p: $0) }
+                .navigationDestination(for: Listing.self) { ListingDetail(l: $0) }
+                .refreshable { await store.refresh() }
         }
     }
+
     private func authenticate() {
         let ctx = LAContext(); ctx.localizedCancelTitle = "Cancel"
         var err: NSError?
         let policy: LAPolicy = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err)
             ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication
         ctx.evaluatePolicy(policy, localizedReason: "Unlock The Firm") { ok, _ in
-            DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.25)) { locked = !ok } }
+            DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.25)) { locked = !ok }
+                if ok { Task { await store.refresh() } } }
         }
     }
 }
 
 struct ApproveScreen: View {
-    var code: String?; var retry: () -> Void
+    let code: String?
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
             VStack(spacing: 14) {
-                Image(systemName: "iphone.badge.checkmark" ).font(.system(size: 50, weight: .light)).foregroundStyle(.secondary)
+                Image(systemName: "iphone.badge.checkmark").font(.system(size: 50, weight: .light)).foregroundStyle(.secondary)
                 Text("Approve this iPhone").font(.title2.weight(.semibold))
                 Text("Open The Firm on the web, go to Manage → Approve a device, and enter this code.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 36)
                 if let c = code {
-                    Text(c.prefix(3) + " " + c.suffix(3)).font(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit().padding(.top, 8)
+                    Text(c.prefix(3) + " " + c.suffix(3))
+                        .font(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit().padding(.top, 8)
                     Text("Valid for 10 minutes").font(.caption).foregroundStyle(.tertiary)
                 } else { ProgressView().padding(.top, 8) }
             }
@@ -83,51 +85,8 @@ struct LockScreen: View {
             VStack(spacing: 14) {
                 Image(systemName: "faceid").font(.system(size: 56, weight: .light))
                 Text("The Firm").font(.title2.weight(.semibold))
-                Button("Unlock") { unlock() }.buttonStyle(.borderedProminent).padding(.top, 6)
+                Button("Unlock", action: unlock).buttonStyle(.borderedProminent).padding(.top, 6)
             }
         }
     }
 }
-
-// Real Liquid Glass on iOS 26; the closest material below it.
-struct GlassTabBar: View {
-    let tabs: [(String, String, String)]
-    @Binding var selected: String
-    var onSelect: (String) -> Void
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(tabs, id: \.0) { t in
-                Button {
-                    selected = t.0; onSelect(t.0)
-                    UISelectionFeedbackGenerator().selectionChanged()
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: t.2).font(.system(size: 20, weight: .medium))
-                        Text(t.1).font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(selected == t.0 ? Color.accentColor : Color.secondary)
-                    .frame(maxWidth: .infinity).frame(height: 52)
-                    .background {
-                        if selected == t.0 { Capsule().fill(Color.primary.opacity(0.08)) }
-                    }
-                }.buttonStyle(.plain)
-            }
-        }
-        .padding(6)
-        .modifier(GlassCapsule())
-    }
-}
-
-struct GlassCapsule: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            content.background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.15), radius: 16, y: 8)
-        }
-    }
-}
-
-final class WebHolder: ObservableObject { var view: WKWebView? }
