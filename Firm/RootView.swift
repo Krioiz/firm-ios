@@ -22,8 +22,8 @@ struct RootView: View {
             .padding(.horizontal, 16).padding(.bottom, 10)
             if locked { LockScreen(unlock: authenticate).transition(.opacity) }
         }
-        .onAppear { authenticate() }
-        .onChange(of: phase) { p in if p == .background { locked = true } else if p == .active && locked { authenticate() } }
+        .onAppear { authenticate(); Alerts.shared.start() }
+        .onChange(of: phase) { p in if p == .background { locked = true; Alerts.shared.schedule() } else if p == .active { if locked { authenticate() }; Alerts.shared.refresh { } } }
     }
 
     private func authenticate() {

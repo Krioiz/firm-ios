@@ -18,11 +18,13 @@ targets:
         UIViewControllerBasedStatusBarAppearance: true
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
         NSFaceIDUsageDescription: Unlock The Firm with Face ID.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.getstubbie.firm.refresh]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.firm
-        MARKETING_VERSION: "1.1"
+        MARKETING_VERSION: "1.2"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGNING_ALLOWED: "NO"
