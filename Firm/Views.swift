@@ -98,6 +98,25 @@ struct TodayView: View {
                     LutherHero(l: l, start: start, history: store.history, scrubbed: $scrubbed)
                         .padding(.horizontal, 16).padding(.bottom, 14)
                 }
+                if store.inboxCount > 0 {
+                    NavigationLink(value: "inbox") {
+                        HStack(spacing: 12) {
+                            Image(systemName: "tray.full.fill").font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white).frame(width: 32, height: 32)
+                                .background(.orange, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(store.inboxCount) waiting on you").font(.system(size: 17, weight: .semibold))
+                                Text("Ideas and work the agents cannot move without you")
+                                    .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain).padding(.horizontal, 16).padding(.bottom, 10)
+                }
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                     Tile(label: d == nil ? "Spent today" : "Spent that day", value: Fmt.money(d?.spend ?? spend),
                          foot: spendFoot(spend), tint: .blue, icon: "dollarsign.circle.fill",

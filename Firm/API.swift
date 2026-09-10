@@ -96,6 +96,7 @@ struct History: Codable { let days: [Day]? }
     @Published var settings: Settings? = nil
     @Published var bots: [Bot] = []
     @Published var history: [Day] = []
+    @Published var inboxCount = 0
     @Published var loaded = false
     @Published var lastError: String? = nil
     @Published var needsApproval = false
@@ -134,12 +135,14 @@ struct History: Codable { let days: [Day]? }
         async let st: Settings? = get("/settings", Settings.self)
         async let bo: [Bot]? = get("/bots", [Bot].self)
         async let hi: History? = get("/history", History.self)
+        async let ib: InboxPayload? = get("/inbox", InboxPayload.self)
         if let v = await s?.agents { agents = v.items }
         luther = await l; sales = await sa; lab = await lb; pipeline = await pp; products = await pr
         if let v = await al?.alerts { alerts = v }
         settings = await st
         if let v = await bo { bots = v }
         if let v = await hi?.days { history = v }
+        inboxCount = await ib?.count ?? 0
         loaded = true
         if agents.isEmpty && lastError == nil { lastError = "The server returned no agents." }
     }
