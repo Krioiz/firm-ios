@@ -18,11 +18,13 @@ struct Tile: View {
         .padding(14)
         .overlay(alignment: .bottomTrailing) {
             if let s = series, s.count > 1 {
+                let lo = s.min() ?? 0, hi = s.max() ?? 1, pad = max((hi - lo) * 0.15, 0.5)
                 Chart(Array(s.enumerated()), id: \.offset) { i, v in
                     LineMark(x: .value("i", i), y: .value("v", v)).foregroundStyle(tint)
                         .interpolationMethod(.catmullRom).lineStyle(.init(lineWidth: 2, lineCap: .round))
                 }
                 .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
+                .chartYScale(domain: (lo - pad)...(hi + pad))
                 .frame(width: 64, height: 30).padding(12)
             } else if let (n, total) = ring {
                 ZStack {
@@ -149,9 +151,15 @@ struct LutherHero: View {
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             }.padding(.top, 6)
             if pts.count > 1 {
+                // The Y range must be built from the data. An AreaMark fills to zero by
+                // default, which put a $16 spread on a 0-1000 axis and drew a flat line.
+                let vals = pts.compactMap(\.equity)
+                let lo = min(vals.min() ?? start, start), hi = max(vals.max() ?? start, start)
+                let pad = max((hi - lo) * 0.18, 1)
+                let bottom = lo - pad, topY = hi + pad
                 Chart {
                     ForEach(Array(pts.enumerated()), id: \.offset) { i, p in
-                        AreaMark(x: .value("i", i), y: .value("v", p.equity ?? 0))
+                        AreaMark(x: .value("i", i), yStart: .value("b", bottom), yEnd: .value("v", p.equity ?? 0))
                             .foregroundStyle(LinearGradient(colors: [(up ? Color.green : .red).opacity(0.28), .clear], startPoint: .top, endPoint: .bottom))
                             .interpolationMethod(.catmullRom)
                         LineMark(x: .value("i", i), y: .value("v", p.equity ?? 0))
@@ -166,7 +174,7 @@ struct LutherHero: View {
                     }
                 }
                 .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
-                .chartYScale(domain: .automatic(includesZero: false))
+                .chartYScale(domain: bottom...topY)
                 .frame(height: 130).padding(.top, 10)
                 .chartOverlay { proxy in
                     GeometryReader { geo in
