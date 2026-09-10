@@ -5,13 +5,30 @@ import SwiftUI
 // Every field is optional: the server is the source of truth and may add or drop keys,
 // and a missing key must never blank the screen.
 struct Agent: Codable, Identifiable, Hashable {
+    // `tasks` is an ARRAY of task objects on the server, not a count. Declaring it as a
+    // number made the whole payload fail to decode and the team list came back empty.
+    // Only the fields actually used are declared; anything else is ignored.
     let id: String; let name: String?; let role: String?; let state: String?
-    let spend: Double?; let tasks: Int?; let tasksDone: Int?
+    let spend: Double?; let tasksDone: Int?
     var working: Bool { state == "active" || state == "working" }
     var display: String { (name ?? id).prefix(1).uppercased() + (name ?? id).dropFirst() }
     var tidyRole: String { (role ?? "").lowercased().prefix(1).uppercased() + (role ?? "").lowercased().dropFirst() }
 }
-struct StatePayload: Codable { let agents: [Agent]? }
+/// Decodes an array element by element, dropping any that fail. One malformed record
+/// should cost that record, never the whole screen.
+struct Lenient<T: Codable>: Codable {
+    let items: [T]
+    init(from decoder: Decoder) throws {
+        var c = try decoder.unkeyedContainer(); var out: [T] = []
+        while !c.isAtEnd {
+            if let v = try? c.decode(T.self) { out.append(v) } else { _ = try? c.decode(AnyCodable.self) }
+        }
+        items = out
+    }
+    func encode(to encoder: Encoder) throws { var c = encoder.unkeyedContainer(); try c.encode(contentsOf: items) }
+}
+struct AnyCodable: Codable {}
+struct StatePayload: Codable { let agents: Lenient<Agent>? }
 
 struct CurvePoint: Codable, Hashable { let at: String?; let equity: Double? }
 struct Bet: Codable, Identifiable, Hashable {
@@ -117,13 +134,14 @@ struct History: Codable { let days: [Day]? }
         async let st: Settings? = get("/settings", Settings.self)
         async let bo: [Bot]? = get("/bots", [Bot].self)
         async let hi: History? = get("/history", History.self)
-        if let v = await s?.agents { agents = v }
+        if let v = await s?.agents { agents = v.items }
         luther = await l; sales = await sa; lab = await lb; pipeline = await pp; products = await pr
         if let v = await al?.alerts { alerts = v }
         settings = await st
         if let v = await bo { bots = v }
         if let v = await hi?.days { history = v }
         loaded = true
+        if agents.isEmpty && lastError == nil { lastError = "The server returned no agents." }
     }
     func saveCap(_ key: String, _ value: Double) async -> String? {
         var r = URLRequest(url: URL(string: Store.base + "/settings")!); r.httpMethod = "POST"

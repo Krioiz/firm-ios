@@ -11,7 +11,13 @@ struct TeamView: View {
             if !idle.isEmpty { Section("Idle · \(idle.count)") { ForEach(idle) { AgentRow(a: $0) } } }
         }
         .navigationTitle("Team")
-        .overlay { if store.agents.isEmpty && store.loaded { ContentUnavailableView("No agents", systemImage: "person.2") } }
+        .overlay {
+            if store.agents.isEmpty && store.loaded {
+                ContentUnavailableView { Label("No agents", systemImage: "person.2") }
+                description: { Text(store.lastError ?? "The server returned an empty list.") }
+                actions: { Button("Try again") { Task { await store.refresh() } } }
+            }
+        }
     }
 }
 struct AgentRow: View {
