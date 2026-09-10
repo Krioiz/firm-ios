@@ -70,7 +70,17 @@ struct ChatPayload: Codable { let messages: [Message]?; let pending: Bool? }
 struct ChatsView: View {
     @EnvironmentObject var store: Store
     @State private var chats: [ChatRow] = []
+    @AppStorage("chatSeg") private var seg = 0
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $seg) { Text("Agents").tag(0); Text("Rooms").tag(1) }
+                .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
+            if seg == 1 { RoomsList() } else { agentList }
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Chat")
+    }
+    private var agentList: some View {
         List {
             ForEach(chats) { c in
                 if let agent = store.agents.first(where: { $0.id == c.agent }) {
@@ -94,7 +104,6 @@ struct ChatsView: View {
                 }
             }
         }
-        .navigationTitle("Chat")
         .task { await load() }
         .refreshable { await load() }
         .overlay { if chats.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") } }

@@ -42,6 +42,7 @@ struct RootView: View {
                 .navigationDestination(for: Listing.self) { ListingDetail(l: $0) }
                 .navigationDestination(for: Conversation.self) { ChatView(agent: $0.agent) }
                 .navigationDestination(for: String.self) { if $0 == "inbox" { InboxView() } }
+                .navigationDestination(for: Room.self) { RoomView(roomId: $0.id) }
                 .refreshable { await store.refresh() }
         }
     }

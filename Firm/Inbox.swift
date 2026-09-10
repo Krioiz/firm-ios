@@ -61,13 +61,16 @@ struct InboxView: View {
     @StateObject private var model = InboxModel()
     @State private var rejecting: InboxItem? = nil
     @State private var reason = ""
+    @State private var discussing: InboxItem? = nil
+    @State private var goToRoom: Room? = nil
     var body: some View {
         List {
             ForEach(model.items) { item in
                 InboxCard(item: item, busy: model.busy.contains(item.id),
                           agent: store.agents.first { $0.id == item.agent },
                           approve: { Task { await model.decide(item, yes: true) } },
-                          reject: { rejecting = item; reason = "" })
+                          reject: { rejecting = item; reason = "" },
+                          discuss: { discussing = item })
             }
         }
         .navigationTitle("Inbox")
@@ -82,6 +85,11 @@ struct InboxView: View {
         .alert("Something went wrong", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
+        .sheet(item: $discussing) { item in
+            NewRoomSheet(topic: item.title ?? "Idea", seed: item.detail ?? "") { room in goToRoom = room }
+                .environmentObject(store)
+        }
+        .navigationDestination(item: $goToRoom) { RoomView(roomId: $0.id) }
         .sheet(item: $rejecting) { item in
             NavigationStack {
                 Form {
@@ -109,7 +117,7 @@ struct InboxView: View {
 
 struct InboxCard: View {
     let item: InboxItem; let busy: Bool; let agent: Agent?
-    let approve: () -> Void; let reject: () -> Void
+    let approve: () -> Void; let reject: () -> Void; let discuss: () -> Void
     private var verb: (String, String) { item.action == "build" ? ("Build this", "Not now") : ("Keep", "Reject") }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -143,6 +151,9 @@ struct InboxCard: View {
                 Button(action: reject) {
                     Label(verb.1, systemImage: "xmark").frame(maxWidth: .infinity)
                 }.buttonStyle(.bordered).tint(.red).disabled(busy)
+                Button(action: discuss) {
+                    Image(systemName: "person.3.fill")
+                }.buttonStyle(.bordered).disabled(busy)
             }
             .controlSize(.regular)
             .overlay { if busy { ProgressView() } }
