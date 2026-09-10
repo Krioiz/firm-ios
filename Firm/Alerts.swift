@@ -15,7 +15,6 @@ final class Alerts: NSObject, UNUserNotificationCenterDelegate {
 
     func start() {
         let c = UNUserNotificationCenter.current(); c.delegate = self
-        c.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Alerts.taskId, using: nil) { task in
             self.refresh { task.setTaskCompleted(success: true); self.schedule() }
         }

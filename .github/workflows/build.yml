@@ -1,4 +1,4 @@
-name: Build unsigned IPA
+name: Build signed IPA
 on: { push: { branches: [main] }, workflow_dispatch: {} }
 permissions: { contents: write }
 jobs:
@@ -6,22 +6,23 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Newest Xcode on the runner
-        run: |
-          X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); sudo xcode-select -s "$X"; xcodebuild -version | head -2
+      - name: Newest Xcode
+        run: X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); sudo xcode-select -s "$X"; xcodebuild -version | head -1
       - run: brew install xcodegen
-      - run: xcodegen generate
-      - name: Build (unsigned)
-        run: |
-          xcodebuild -project Firm.xcodeproj -scheme Firm -configuration Release -sdk iphoneos \
-            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            -destination 'generic/platform=iOS' build | tail -20
-      - name: Package .ipa
-        run: |
-          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/Firm.app Payload/
-          zip -qr Firm.ipa Payload && ls -la Firm.ipa
+      - uses: ruby/setup-ruby@v1
+        with: { ruby-version: "3.3", bundler-cache: false }
+      - run: gem install fastlane -N
+      - name: Signed build
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: fastlane build
       - uses: actions/upload-artifact@v4
-        with: { name: Firm-ipa, path: Firm.ipa }
+        with: { name: Firm-ipa, path: out/Firm.ipa }
       - name: Publish release
         env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh release create "build-${{ github.run_number }}" Firm.ipa --title "The Firm build ${{ github.run_number }}" --notes "Unsigned IPA. Install with Feather." || gh release upload "build-${{ github.run_number }}" Firm.ipa --clobber
+        run: gh release create "build-${{ github.run_number }}" out/Firm.ipa --title "The Firm build ${{ github.run_number }}" --notes "Signed development build." || gh release upload "build-${{ github.run_number }}" out/Firm.ipa --clobber
