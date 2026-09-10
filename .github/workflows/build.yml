@@ -6,6 +6,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Newest Xcode on the runner
+        run: |
+          X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); sudo xcode-select -s "$X"; xcodebuild -version | head -2
       - run: brew install xcodegen
       - run: xcodegen generate
       - name: Build (unsigned)
