@@ -12,6 +12,7 @@ struct RootView: View {
         TabView(selection: $tab) {
             Tab("Today", systemImage: "house.fill", value: "today") { nav { TodayView() } }
             Tab("Team", systemImage: "person.2.fill", value: "team") { nav { TeamView() } }
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right.fill", value: "chat") { nav { ChatsView() } }
             Tab("Business", systemImage: "chart.line.uptrend.xyaxis", value: "business") { nav { BusinessView() } }
             Tab("Manage", systemImage: "gearshape.fill", value: "manage") { nav { ManageView() } }
         }
@@ -39,6 +40,7 @@ struct RootView: View {
                 .navigationDestination(for: Bet.self) { BetDetail(b: $0) }
                 .navigationDestination(for: Product.self) { ProductDetail(p: $0) }
                 .navigationDestination(for: Listing.self) { ListingDetail(l: $0) }
+                .navigationDestination(for: Conversation.self) { ChatView(agent: $0.agent) }
                 .refreshable { await store.refresh() }
         }
     }

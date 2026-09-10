@@ -52,6 +52,11 @@ struct AgentDetail: View {
                 }.padding(.vertical, 6)
             }
             Section {
+                NavigationLink(value: Conversation(agent: a)) {
+                    Label("Message \(a.display)", systemImage: "bubble.left.fill")
+                }
+            }
+            Section {
                 LabeledContent("Working") { Text(a.working ? "Yes" : "Idle").foregroundStyle(a.working ? .green : .secondary) }
                 LabeledContent("Spent today") { Text(Fmt.money(a.spend)).monospacedDigit() }
                 if let t = a.tasksDone { LabeledContent("Tasks done") { Text("\(t)") } }
