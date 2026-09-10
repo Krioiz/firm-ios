@@ -24,7 +24,7 @@ final class Push: NSObject, UIApplicationDelegate {
             var req = URLRequest(url: URL(string: "https://getstubbie.com/dashboard/push/apns")!)
             req.httpMethod = "POST"; req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("firm_session=\(s.value)", forHTTPHeaderField: "Cookie")
-            req.setValue("FirmApp/2.0", forHTTPHeaderField: "User-Agent")
+            req.setValue("FirmApp/2.1", forHTTPHeaderField: "User-Agent")
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "name": UIDevice.current.name])
             URLSession.shared.dataTask(with: req).resume()
         }

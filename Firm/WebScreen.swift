@@ -12,12 +12,11 @@ struct WebScreen: UIViewRepresentable {
         let js = "window.FIRM_NATIVE = true; document.documentElement.classList.add('native');"
         cfg.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let web = WKWebView(frame: .zero, configuration: cfg)
-        web.customUserAgent = (web.value(forKey: "userAgent") as? String ?? "") + " FirmApp/1.1"
+        web.customUserAgent = (web.value(forKey: "userAgent") as? String ?? "") + " FirmApp/2.1"
         web.scrollView.contentInsetAdjustmentBehavior = .never
         web.isOpaque = false; web.backgroundColor = .systemBackground
         web.allowsBackForwardNavigationGestures = false
-        web.load(URLRequest(url: URL(string: "https://getstubbie.com/dashboard/app/")!))
-        holder.view = web
+        holder.view = web                     // RootView loads the page once the device has a session
         return web
     }
     func updateUIView(_ uiView: WKWebView, context: Context) {}

@@ -8,6 +8,8 @@ struct RootView: View {
     @StateObject private var web = WebHolder()
     @State private var locked = true
     @State private var tab = "today"
+    @State private var approved: Bool? = nil        // nil = checking
+    @State private var code: String? = nil
     @Environment(\.scenePhase) private var phase
     private let tabs: [(String, String, String)] = [
         ("today", "Today", "house.fill"), ("team", "Team", "person.2.fill"), ("shop", "Shop", "bag.fill"),
@@ -20,12 +22,25 @@ struct RootView: View {
                 web.view?.evaluateJavaScript("go('\(key)')", completionHandler: nil)
             }
             .padding(.horizontal, 16).padding(.bottom, 10)
+            if approved == false { ApproveScreen(code: code, retry: pair).transition(.opacity) }
             if locked { LockScreen(unlock: authenticate).transition(.opacity) }
         }
-        .onAppear { authenticate(); Alerts.shared.start() }
+        .onAppear { authenticate(); Alerts.shared.start(); pair() }
         .onChange(of: phase) { p in if p == .background { locked = true; Alerts.shared.schedule() } else if p == .active { if locked { authenticate() }; Alerts.shared.refresh { } } }
     }
 
+    // Establish a session with the device secret; if this phone is not approved yet,
+    // show a code for Marco to enter in the web app, then keep checking.
+    private func pair() {
+        DeviceAuth.session { ok in
+            DispatchQueue.main.async {
+                if ok { approved = true; web.view?.load(URLRequest(url: URL(string: "https://getstubbie.com/dashboard/app/")!)); return }
+                approved = false
+                if code == nil { DeviceAuth.requestCode { c in DispatchQueue.main.async { code = c } } }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if approved == false { pair() } }
+            }
+        }
+    }
     private func authenticate() {
         let ctx = LAContext(); ctx.localizedCancelTitle = "Cancel"
         var err: NSError?
@@ -33,6 +48,25 @@ struct RootView: View {
             ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication
         ctx.evaluatePolicy(policy, localizedReason: "Unlock The Firm") { ok, _ in
             DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.25)) { locked = !ok } }
+        }
+    }
+}
+
+struct ApproveScreen: View {
+    var code: String?; var retry: () -> Void
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Image(systemName: "iphone.badge.checkmark" ).font(.system(size: 50, weight: .light)).foregroundStyle(.secondary)
+                Text("Approve this iPhone").font(.title2.weight(.semibold))
+                Text("Open The Firm on the web, go to Manage → Approve a device, and enter this code.")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 36)
+                if let c = code {
+                    Text(c.prefix(3) + " " + c.suffix(3)).font(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit().padding(.top, 8)
+                    Text("Valid for 10 minutes").font(.caption).foregroundStyle(.tertiary)
+                } else { ProgressView().padding(.top, 8) }
+            }
         }
     }
 }
