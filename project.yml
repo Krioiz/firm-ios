@@ -1,0 +1,29 @@
+name: Firm
+options:
+  bundleIdPrefix: com.getstubbie
+  deploymentTarget: { iOS: "16.4" }
+targets:
+  Firm:
+    type: application
+    platform: iOS
+    sources: [Firm]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Firm/Info.plist
+      properties:
+        CFBundleDisplayName: The Firm
+        UILaunchScreen: {}
+        UIViewControllerBasedStatusBarAppearance: true
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.firm
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
