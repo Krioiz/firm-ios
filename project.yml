@@ -14,6 +14,8 @@ targets:
       path: Firm/Info.plist
       properties:
         CFBundleDisplayName: The Firm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIViewControllerBasedStatusBarAppearance: true
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
