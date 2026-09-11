@@ -1,10 +1,12 @@
 import SwiftUI
 import LocalAuthentication
+import UserNotifications
 
 struct RootView: View {
     @StateObject private var store = Store()
     @State private var locked = true
     @State private var tab = "today"
+    @State private var chatPath = NavigationPath()
     @AppStorage("theme") private var theme = "system"
     @Environment(\.scenePhase) private var phase
 
@@ -12,7 +14,9 @@ struct RootView: View {
         TabView(selection: $tab) {
             Tab("Today", systemImage: "house.fill", value: "today") { nav { TodayView() } }
             Tab("Team", systemImage: "person.2.fill", value: "team") { nav { TeamView() } }
-            Tab("Chat", systemImage: "bubble.left.and.bubble.right.fill", value: "chat") { nav { ChatsView() } }
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right.fill", value: "chat") {
+                nav(path: $chatPath) { ChatsView() }
+            }
             Tab("Business", systemImage: "chart.line.uptrend.xyaxis", value: "business") { nav { BusinessView() } }
             Tab("Manage", systemImage: "gearshape.fill", value: "manage") { nav { ManageView() } }
         }
@@ -30,11 +34,28 @@ struct RootView: View {
             else if p == .active { if locked { authenticate() } else { Task { await store.refresh() } } }
         }
         .onChange(of: tab) { _, _ in UISelectionFeedbackGenerator().selectionChanged() }
+        // A tapped alert lands where the thing happened.
+        .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { note in
+            guard let raw = note.userInfo?["url"] as? String else { return }
+            let route = PushRoute(raw)
+            if let room = route.room {
+                tab = "chat"
+                chatPath.append(RoomRef(id: room))
+            } else if let t = route.tab, ["today", "team", "chat", "business", "manage"].contains(t) {
+                tab = t
+            }
+            Task { await store.refresh() }
+        }
+        // The badge is cleared by looking, not by guessing.
+        .onChange(of: phase) { _, p in
+            if p == .active { UNUserNotificationCenter.current().setBadgeCount(0) }
+        }
     }
 
     // one navigation stack per tab, with every detail screen it can push
-    @ViewBuilder private func nav<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        NavigationStack {
+    @ViewBuilder private func nav<C: View>(path: Binding<NavigationPath>? = nil,
+                                           @ViewBuilder _ content: () -> C) -> some View {
+        NavigationStack(path: path ?? .constant(NavigationPath())) {
             content()
                 .navigationDestination(for: Agent.self) { AgentDetail(a: $0) }
                 .navigationDestination(for: Bet.self) { BetDetail(b: $0) }
