@@ -24,8 +24,9 @@ enum DeviceAuth {
         }
     }
     static func requestCode() async -> String? {
-        await withCheckedContinuation { c in
-            post("\(base)/request", ["device_id": deviceId, "secret": secret, "name": UIDevice.current.name]) { j, _ in
+        let name = await MainActor.run { UIDevice.current.name }
+        return await withCheckedContinuation { c in
+            post("\(base)/request", ["device_id": deviceId, "secret": secret, "name": name]) { j, _ in
                 c.resume(returning: j?["code"] as? String)
             }
         }

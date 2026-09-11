@@ -630,7 +630,8 @@ struct RoundStatus: View {
                         if done { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
                         Text(id.capitalized).font(.system(size: 11, weight: now ? .semibold : .regular))
                     }
-                    .foregroundStyle(now ? Color.agentHue(id) : (done ? .secondary : .tertiary))
+                    .foregroundStyle(now ? Color.agentHue(id)
+                                         : (done ? Color.secondary : Color.secondary.opacity(0.45)))
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(now ? Color.agentHue(id).opacity(0.12) : Color.clear, in: Capsule())
                     if id != order.last {
