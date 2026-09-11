@@ -8,6 +8,8 @@ struct RoomMsg: Codable, Identifiable, Hashable {
     var id: String { (at ?? "") + "|" + (who ?? "") + "|" + String((text ?? "").prefix(32)) }
     let role: String?; let who: String?; let text: String?; let at: String?
     let poll: Poll?; let to: [String]?
+    /// Sent while they were still speaking — it goes in as soon as they finish.
+    let waiting: Bool?
 }
 /// A message someone made in the room, waiting to become the verdict on the idea.
 struct PendingVerdict: Identifiable {
@@ -295,7 +297,6 @@ struct RoomView: View {
             }
             HStack(spacing: 10) {
                 Button { showPoll = true } label: { Image(systemName: "checklist").font(.system(size: 20)) }
-                    .disabled(model.speaking != nil)
                 TextField("Say something, or @name one of them…", text: $draft, axis: .vertical).lineLimit(1...5)
                     .onChange(of: draft) { _, v in
                         guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
@@ -368,7 +369,7 @@ struct RoomView: View {
         .alert("Could not send", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(model.error ?? "") }
     }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.speaking == nil }
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var pendingShown: Binding<Bool> {
         Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
     }
@@ -430,7 +431,14 @@ struct RoomBubble: View {
                     .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
                                 in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
-                Text(Fmt.when(m.at)).font(.system(size: 10)).foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    if m.waiting == true {
+                        Image(systemName: "clock").font(.system(size: 9))
+                        Text("they will get this when they finish")
+                    } else {
+                        Text(Fmt.when(m.at))
+                    }
+                }.font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             if !mine { Spacer(minLength: 40) }
         }.padding(.horizontal, 12)
