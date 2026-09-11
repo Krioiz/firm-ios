@@ -132,9 +132,9 @@ struct InboxCard: View {
                 if let s = item.score { Text(item.action == "build" ? Fmt.money(s) : String(format: "%.1f", s))
                     .font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
-            Text(item.title ?? "").font(.system(size: 17, weight: .semibold))
+            Text(item.title ?? "").font(.system(size: 17, weight: .semibold)).textSelection(.enabled)
             if let d = item.detail, !d.isEmpty {
-                Text(d).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(4)
+                Text(d).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(4).textSelection(.enabled)
             }
             if let m = item.meta, !m.isEmpty {
                 Text(m).font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)

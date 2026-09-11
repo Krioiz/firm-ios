@@ -183,6 +183,9 @@ struct RoomView: View {
     @StateObject private var model: RoomModel
     @State private var draft = ""
     @State private var showPoll = false
+    @State private var mentionQuery: String? = nil
+    @State private var rejecting: RoomMsg? = nil
+    @State private var rejectReason = ""
     init(roomId: String) { self.roomId = roomId; _model = StateObject(wrappedValue: RoomModel(id: roomId)) }
     var body: some View {
         VStack(spacing: 0) {
@@ -195,7 +198,22 @@ struct RoomView: View {
                                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                                 .padding(.horizontal, 12)
                         }
-                        ForEach(model.room?.messages ?? []) { m in RoomBubble(m: m, store: store) }
+                        ForEach(model.room?.messages ?? []) { m in
+                            RoomBubble(m: m, store: store)
+                                .contextMenu {
+                                    Button { UIPasteboard.general.string = m.text ?? "" } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                    if let who = m.who, who != "marco" {
+                                        Button { draft = "@\(who) " } label: {
+                                            Label("Reply to \(who.capitalized)", systemImage: "arrowshape.turn.up.left")
+                                        }
+                                        Button(role: .destructive) { rejecting = m; rejectReason = "" } label: {
+                                            Label("Reject this", systemImage: "hand.thumbsdown")
+                                        }
+                                    }
+                                }
+                        }
                         if let who = model.speaking {
                             HStack(spacing: 8) {
                                 if let a = store.agents.first(where: { $0.id == who }) { Avatar(agent: a, size: 26) }
@@ -210,14 +228,40 @@ struct RoomView: View {
                 .onChange(of: model.room?.messages?.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
                 .onChange(of: model.speaking) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             }
+            if let q = mentionQuery {
+                let people = (model.room?.participants ?? []).filter { q.isEmpty || $0.hasPrefix(q.lowercased()) }
+                if !people.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(people, id: \.self) { id in
+                                Button {
+                                    complete(id); UISelectionFeedbackGenerator().selectionChanged()
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        if let a = store.agents.first(where: { $0.id == id }) { Avatar(agent: a, size: 22) }
+                                        Text(id.capitalized).font(.system(size: 14, weight: .medium))
+                                    }
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                                }.buttonStyle(.plain)
+                            }
+                        }.padding(.horizontal, 16).padding(.vertical, 8)
+                    }.background(.bar)
+                }
+            }
             HStack(spacing: 10) {
                 Button { showPoll = true } label: { Image(systemName: "checklist").font(.system(size: 20)) }
                     .disabled(model.speaking != nil)
                 TextField("Say something, or @name one of them…", text: $draft, axis: .vertical).lineLimit(1...5)
+                    .onChange(of: draft) { _, v in
+                        guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
+                        let tail = v[v.index(after: at)...]
+                        mentionQuery = tail.contains(" ") ? nil : String(tail)
+                    }
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 Button {
-                    let t = draft; draft = ""
+                    let t = draft; draft = ""; mentionQuery = nil
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task { await model.say(t) }
                 } label: {
@@ -239,10 +283,42 @@ struct RoomView: View {
         }
         .onAppear { model.start() }.onDisappear { model.stop() }
         .sheet(isPresented: $showPoll) { PollSheet { q, opts in Task { await model.ask(q, opts) } } }
+        .sheet(item: $rejecting) { m in
+            NavigationStack {
+                Form {
+                    Section("They said") {
+                        Text(m.text ?? "").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(6)
+                    }
+                    Section("Why is that wrong?") {
+                        TextField("Optional — but a reason makes the next answer better", text: $rejectReason, axis: .vertical)
+                            .lineLimit(2...5)
+                    }
+                }
+                .navigationTitle("Reject").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { rejecting = nil } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Send") {
+                            let who = m.who ?? "", why = rejectReason.trimmingCharacters(in: .whitespaces)
+                            rejecting = nil
+                            let text = "@\(who) I do not accept that." + (why.isEmpty ? "" : " \(why)") +
+                                       " Answer again, and address the objection directly."
+                            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                            Task { await model.say(text) }
+                        }
+                    }
+                }
+            }.presentationDetents([.medium])
+        }
         .alert("Could not send", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(model.error ?? "") }
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.speaking == nil }
+    private func complete(_ id: String) {
+        guard let at = draft.lastIndex(of: "@") else { return }
+        draft = String(draft[..<at]) + "@" + id + " "
+        mentionQuery = nil
+    }
 }
 
 struct RoomBubble: View {
@@ -260,6 +336,7 @@ struct RoomBubble: View {
                 }
                 if m.poll == nil {
                 Text(m.text ?? "").font(.system(size: 15)).foregroundStyle(mine ? .white : .primary)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 13).padding(.vertical, 9)
                     .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
                                 in: RoundedRectangle(cornerRadius: 16, style: .continuous))

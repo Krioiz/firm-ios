@@ -138,7 +138,14 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 10) {
-                        ForEach(model.messages) { m in Bubble(m: m, agent: agent) }
+                        ForEach(model.messages) { m in
+                            Bubble(m: m, agent: agent)
+                                .contextMenu {
+                                    Button { UIPasteboard.general.string = m.text ?? "" } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                }
+                        }
                         if model.pending {
                             HStack { TypingDots(); Spacer() }
                                 .padding(.horizontal, 16).id("typing")
@@ -224,7 +231,7 @@ struct Bubble: View {
     var body: some View {
         if system {
             Text(m.text ?? "").font(.system(size: 12)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).padding(.horizontal, 28).padding(.vertical, 4)
+                .textSelection(.enabled).multilineTextAlignment(.center).padding(.horizontal, 28).padding(.vertical, 4)
                 .frame(maxWidth: .infinity)
         } else {
             HStack(alignment: .bottom, spacing: 8) {
@@ -232,6 +239,7 @@ struct Bubble: View {
                 VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
                     highlighted(m.text ?? "")
                         .font(.system(size: 16))
+                        .textSelection(.enabled)
                         .foregroundStyle(mine ? .white : .primary)
                         .padding(.horizontal, 13).padding(.vertical, 9)
                         .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),

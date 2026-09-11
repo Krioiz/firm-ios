@@ -196,7 +196,7 @@ struct ProductDetail: View {
                 if let f = p.favourites { LabeledContent("Favourites") { Text("\(f)") } }
                 if let v = p.verdict { LabeledContent("Verdict") { Text(v).foregroundStyle(verdictTint(v)) } }
             }
-            if let t = p.etsy_title { Section("Listing title") { Text(t).font(.system(size: 15)) } }
+            if let t = p.etsy_title { Section("Listing title") { Text(t).font(.system(size: 15)).textSelection(.enabled) } }
             if let id = p.listing_id, let url = URL(string: "https://www.etsy.com/listing/\(id)") {
                 Section { Link("Open on Etsy", destination: url) }
             }
@@ -207,7 +207,7 @@ struct ListingDetail: View {
     let l: Listing
     var body: some View {
         List {
-            Section { Text(l.title ?? "").font(.system(size: 16, weight: .medium)) }
+            Section { Text(l.title ?? "").font(.system(size: 16, weight: .medium)).textSelection(.enabled) }
             Section {
                 LabeledContent("Verdict") { Text(l.verdict ?? "").foregroundStyle(verdictTint(l.verdict)) }
                 if let f = l.what_to_fix { Text(f).font(.system(size: 14)).foregroundStyle(.secondary) }
@@ -298,8 +298,8 @@ struct BetDetail: View {
                 LabeledContent("Unrealised") { Text(Fmt.signed(b.unrealised)).monospacedDigit()
                     .foregroundStyle((b.unrealised ?? 0) >= 0 ? .green : .red) }
             }
-            if let t = b.thesis { Section("Why he took it") { Text(t).font(.system(size: 15)) } }
-            if let f = b.falsifier { Section("What would prove him wrong") { Text(f).font(.system(size: 15)) } }
+            if let t = b.thesis { Section("Why he took it") { Text(t).font(.system(size: 15)).textSelection(.enabled) } }
+            if let f = b.falsifier { Section("What would prove him wrong") { Text(f).font(.system(size: 15)).textSelection(.enabled) } }
             if let e = b.end_date { Section { LabeledContent("Resolves by") { Text(String(e.prefix(10))) } } }
         }.navigationTitle("Bet").navigationBarTitleDisplayMode(.inline)
     }
