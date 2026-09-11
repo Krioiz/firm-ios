@@ -220,7 +220,7 @@ struct RoomView: View {
                                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                                 .padding(.horizontal, 12)
                         }
-                        ForEach(model.room?.messages ?? []) { m in
+                        ForEach(Array((model.room?.messages ?? []).enumerated()), id: \.offset) { _, m in
                             RoomBubble(m: m, store: store)
                                 .contextMenu {
                                     Button { UIPasteboard.general.string = m.text ?? "" } label: {
@@ -476,7 +476,8 @@ struct PollCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(poll.question ?? "").font(.system(size: 15, weight: .semibold))
-            ForEach(tally, id: \.0) { opt, n in
+            ForEach(Array(tally.enumerated()), id: \.offset) { _, row in
+                let (opt, n) = row
                 VStack(alignment: .leading, spacing: 3) {
                     HStack { Text(opt).font(.system(size: 14)); Spacer()
                         Text("\(n)").font(.system(size: 14, weight: .semibold)).monospacedDigit() }

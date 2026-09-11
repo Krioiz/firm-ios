@@ -1,5 +1,10 @@
 import SwiftUI
 @main struct FirmApp: App {
     @UIApplicationDelegateAdaptor(Push.self) var push
-    var body: some Scene { WindowGroup { RootView() } }
+    init() { Crash.install() }
+    var body: some Scene {
+        WindowGroup {
+            RootView().task { Crash.reportIfAny() }
+        }
+    }
 }
