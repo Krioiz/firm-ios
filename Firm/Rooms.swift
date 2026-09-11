@@ -42,7 +42,17 @@ struct RoomPayload: Codable { let room: Room?; let speaking: String? }
     @Published var error: String? = nil
     func load() async {
         guard let p: RoomsPayload = await fetch("/rooms") else { return }
-        rooms = p.rooms ?? []; board = p.board ?? []
+        let fresh = p.rooms ?? []
+        if fresh != rooms { rooms = fresh }
+        if (p.board ?? []) != board { board = p.board ?? [] }
+    }
+    func remove(_ id: String) async {
+        rooms.removeAll { $0.id == id }          // go immediately; the server catches up
+        var r = URLRequest(url: URL(string: "\(Store.base)/rooms/\(id)")!)
+        r.httpMethod = "DELETE"
+        r.setValue("FirmApp/4.9", forHTTPHeaderField: "User-Agent")
+        _ = try? await URLSession.shared.data(for: r)
+        await load()
     }
     func create(topic: String, seed: String, participants: [String], board: Bool,
                 source: (agent: String, slug: String)? = nil) async -> Room? {
@@ -91,7 +101,8 @@ struct RoomPayload: Codable { let room: Room?; let speaking: String? }
         r.setValue("FirmApp/4.2", forHTTPHeaderField: "User-Agent"); r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, _) = try? await URLSession.shared.data(for: r),
               let p = try? JSONDecoder().decode(RoomPayload.self, from: d) else { return }
-        room = p.room; speaking = p.speaking
+        if p.room != room { room = p.room }
+        if p.speaking != speaking { speaking = p.speaking }
     }
     /// Ask the room a closed question with any options you like.
     func ask(_ question: String, _ options: [String]) async {
@@ -438,6 +449,12 @@ struct RoomsList: View {
                         }
                     }.padding(.vertical, 3)
                 }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                        Task { await model.remove(r.id) }
+                    } label: { Label("Delete", systemImage: "trash") }
+                }
             }
         }
         .task { await model.load() }.refreshable { await model.load() }
@@ -495,11 +512,23 @@ struct PollCard: View {
     }
 }
 
+struct PollOption: Identifiable, Hashable {
+    let id = UUID()
+    var text: String = ""
+}
+
 struct PollSheet: View {
     var onAsk: (String, [String]) -> Void
+    /// Blank rows never reach the room, and two identical options would collide once the
+    /// results come back.
+    private var cleaned: [String] {
+        var seen = Set<String>()
+        return options.map { $0.text.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var question = ""
-    @State private var options: [String] = ["", ""]
+    @State private var options: [PollOption] = [PollOption(), PollOption()]
     private let presets: [(String, [String])] = [
         ("Go / No-go", ["Go", "No-go"]),
         ("Yes / No / Needs work", ["Yes", "No", "Needs work"]),
@@ -513,20 +542,30 @@ struct PollSheet: View {
                 }
                 Section("Quick sets") {
                     ForEach(presets, id: \.0) { name, opts in
-                        Button(name) { options = opts; UISelectionFeedbackGenerator().selectionChanged() }
+                        Button(name) {
+                            options = opts.map { PollOption(text: $0) }
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
                     }
                 }
                 Section("Options") {
-                    ForEach(options.indices, id: \.self) { i in
+                    // Each row is bound to its own identity, never to a position. Binding
+                    // a text field to options[i] and then removing row i reads an index
+                    // that no longer exists, which is a crash, not a glitch.
+                    ForEach($options) { $opt in
                         HStack {
-                            TextField("Option \(i + 1)", text: Binding(get: { options[i] }, set: { options[i] = $0 }))
+                            TextField("Option", text: $opt.text)
                             if options.count > 2 {
-                                Button { options.remove(at: i) } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
-                                    .buttonStyle(.plain)
+                                Button {
+                                    options.removeAll { $0.id == opt.id }
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                                }.buttonStyle(.plain)
                             }
                         }
                     }
-                    if options.count < 6 { Button("Add an option") { options.append("") } }
+                    if options.count < 6 { Button("Add an option") { options.append(PollOption()) } }
                 }
             }
             .navigationTitle("Ask the room").navigationBarTitleDisplayMode(.inline)
@@ -534,10 +573,9 @@ struct PollSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Ask") {
-                        onAsk(question.trimmingCharacters(in: .whitespaces),
-                              options.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+                        onAsk(question.trimmingCharacters(in: .whitespaces), cleaned)
                         dismiss()
-                    }.disabled(options.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count < 2)
+                    }.disabled(cleaned.count < 2)
                 }
             }
         }.presentationDetents([.large])

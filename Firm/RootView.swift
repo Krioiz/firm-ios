@@ -47,10 +47,13 @@ struct RootView: View {
                     switch key {
                     case "inbox": InboxView()
                     case "providers": ProvidersView()
+                    case "log": LogView()
                     default: EmptyView()
                     }
                 }
                 .navigationDestination(for: RoomRef.self) { RoomView(roomId: $0.id) }
+                // the grey line that rides up the right edge while you scroll
+                .scrollIndicators(.hidden)
                 .refreshable { await store.refresh() }
         }
     }

@@ -174,19 +174,44 @@ enum Fmt {
         let n = v ?? 0
         return (n < 0 ? "-$" : "+$") + String(format: "%.2f", abs(n))
     }
+    // Building a DateFormatter is genuinely expensive, and these run once per visible row.
+    // Made once, reused, and the results memoised — scrolling a long log was doing
+    // thousands of allocations a second for text that never changes.
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
+    }()
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+    private static let ymd: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+    private static let dayOut: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "d MMM"; return f
+    }()
+    private static let whenOut: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f
+    }()
+    private static let cache = NSCache<NSString, NSString>()
+
+    private static func parse(_ s: String) -> Date? {
+        iso.date(from: s) ?? isoFractional.date(from: s) ?? ymd.date(from: String(s.prefix(10)))
+    }
+    private static func memo(_ key: String, _ make: () -> String) -> String {
+        if let hit = cache.object(forKey: key as NSString) { return hit as String }
+        let v = make()
+        cache.setObject(v as NSString, forKey: key as NSString)
+        return v
+    }
     static func day(_ s: String?) -> String {
         guard let s else { return "" }
-        let iso = ISO8601DateFormatter(); iso.formatOptions = [.withInternetDateTime]
-        let alt = DateFormatter(); alt.dateFormat = "yyyy-MM-dd"; alt.locale = Locale(identifier: "en_US_POSIX")
-        let d = iso.date(from: s) ?? alt.date(from: String(s.prefix(10)))
-        guard let d else { return s }
-        let out = DateFormatter(); out.dateFormat = "d MMM"; return out.string(from: d)
+        return memo("d|" + s) { parse(s).map { dayOut.string(from: $0) } ?? s }
     }
     static func when(_ s: String?) -> String {
         guard let s else { return "" }
-        let iso = ISO8601DateFormatter(); iso.formatOptions = [.withInternetDateTime]
-        guard let d = iso.date(from: s) else { return String(s.prefix(16)) }
-        let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f.string(from: d)
+        return memo("w|" + s) { parse(s).map { whenOut.string(from: $0) } ?? String(s.prefix(16)) }
     }
 }
 extension Color {

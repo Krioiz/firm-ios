@@ -10,6 +10,13 @@ struct ManageView: View {
     @StateObject private var prov = ProvidersModel()
     var body: some View {
         List {
+            Section("Activity") {
+                NavigationLink(value: "log") {
+                    Label("Log", systemImage: "list.bullet.rectangle")
+                }
+            } footer: {
+                Text("Everything the agents did, including what failed. Searchable.")
+            }
             Section("Appearance") {
                 Picker("Theme", selection: $theme) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }
                     .pickerStyle(.segmented)
