@@ -124,6 +124,8 @@ struct Conversation: Hashable { let agent: Agent }
 
 // ---- one conversation ----------------------------------------------------------------
 struct ChatView: View {
+    @State private var atBottom = true
+    @State private var unread = 0
     let agent: Agent
     @EnvironmentObject var store: Store
     @StateObject private var model: ChatModel
@@ -153,9 +155,25 @@ struct ChatView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.vertical, 12)
                 }
-                .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-                .onChange(of: model.pending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
+                .followsBottom($atBottom)
+                .onChange(of: model.messages.count) { old, new in
+                    if atBottom { withAnimation { proxy.scrollTo("bottom") }; unread = 0 }
+                    else { unread += max(0, new - old) }
+                }
+                .onChange(of: model.pending) { _, _ in
+                    if atBottom { withAnimation { proxy.scrollTo("bottom") } }
+                }
+                .onChange(of: atBottom) { _, down in if down { unread = 0 } }
                 .onAppear { proxy.scrollTo("bottom") }
+                .overlay(alignment: .bottom) {
+                    if !atBottom {
+                        JumpToLatest(unread: unread) {
+                            withAnimation { proxy.scrollTo("bottom") }
+                            unread = 0; atBottom = true
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
+                    }
+                }
             }
             if let q = mentionQuery {
                 let matches = store.agents.filter { $0.id != agent.id && (q.isEmpty || $0.id.hasPrefix(q.lowercased())) }

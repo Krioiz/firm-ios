@@ -219,6 +219,8 @@ struct RoomView: View {
     @State private var rejectReason = ""
     @State private var pending: PendingVerdict? = nil
     @State private var verdictNote: String? = nil
+    @State private var atBottom = true
+    @State private var unread = 0
     init(roomId: String) { self.roomId = roomId; _model = StateObject(wrappedValue: RoomModel(id: roomId)) }
     var body: some View {
         VStack(spacing: 0) {
@@ -259,19 +261,31 @@ struct RoomView: View {
                                     }
                                 }
                         }
-                        if let who = model.speaking {
-                            HStack(spacing: 8) {
-                                if let a = store.agents.first(where: { $0.id == who }) { Avatar(agent: a, size: 26) }
-                                TypingDots()
-                                Text("\(who.capitalized) is thinking").font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                            }.padding(.horizontal, 12)
+                        if model.speaking != nil {
+                            RoundStatus(room: model.room, speaking: model.speaking, store: store)
+                                .padding(.horizontal, 12)
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.vertical, 12)
                 }
-                .onChange(of: model.room?.messages?.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-                .onChange(of: model.speaking) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
+                .followsBottom($atBottom)
+                .onChange(of: model.room?.messages?.count) { old, new in
+                    if atBottom { withAnimation { proxy.scrollTo("bottom") }; unread = 0 }
+                    else { unread += max(0, (new ?? 0) - (old ?? 0)) }
+                }
+                .onChange(of: model.speaking) { _, _ in
+                    if atBottom { withAnimation { proxy.scrollTo("bottom") } }
+                }
+                .onChange(of: atBottom) { _, down in if down { unread = 0 } }
+                .overlay(alignment: .bottom) {
+                    if !atBottom {
+                        JumpToLatest(unread: unread) {
+                            withAnimation { proxy.scrollTo("bottom") }
+                            unread = 0; atBottom = true
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
+                    }
+                }
             }
             if let q = mentionQuery {
                 let people = (model.room?.participants ?? []).filter { q.isEmpty || $0.hasPrefix(q.lowercased()) }
@@ -579,5 +593,53 @@ struct PollSheet: View {
                 }
             }
         }.presentationDetents([.large])
+    }
+}
+
+
+/// They take turns on the server — one speaks, the next reads what was said, then answers.
+/// This shows that happening, so a quiet minute reads as a queue rather than a hang.
+struct RoundStatus: View {
+    let room: Room?
+    let speaking: String?
+    let store: Store
+
+    /// Everyone who has spoken since Marco last said something.
+    private var spoken: Set<String> {
+        let msgs = room?.messages ?? []
+        guard let lastMine = msgs.lastIndex(where: { $0.who == "marco" }) else { return [] }
+        return Set(msgs[msgs.index(after: lastMine)...].compactMap { $0.who })
+    }
+    private var order: [String] { room?.participants ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let who = speaking {
+                HStack(spacing: 8) {
+                    if let a = store.agents.first(where: { $0.id == who }) { Avatar(agent: a, size: 26) }
+                    TypingDots()
+                    Text("\(who.capitalized) is thinking").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+            HStack(spacing: 6) {
+                ForEach(Array(order.enumerated()), id: \.offset) { _, id in
+                    let done = spoken.contains(id)
+                    let now = id == speaking
+                    HStack(spacing: 4) {
+                        if done { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
+                        Text(id.capitalized).font(.system(size: 11, weight: now ? .semibold : .regular))
+                    }
+                    .foregroundStyle(now ? Color.agentHue(id) : (done ? .secondary : .tertiary))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(now ? Color.agentHue(id).opacity(0.12) : Color.clear, in: Capsule())
+                    if id != order.last {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7)).foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+            }
+        }
     }
 }
