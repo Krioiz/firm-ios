@@ -1,8 +1,13 @@
 import SwiftUI
 
+struct Poll: Codable, Hashable {
+    let question: String?; let options: [String]?; let votes: [String: Vote]?
+    struct Vote: Codable, Hashable { let choice: String?; let why: String? }
+}
 struct RoomMsg: Codable, Identifiable, Hashable {
-    var id: String { (at ?? "") + (who ?? "") }
+    var id: String { (at ?? "") + "|" + (who ?? "") + "|" + String((text ?? "").prefix(32)) }
     let role: String?; let who: String?; let text: String?; let at: String?
+    let poll: Poll?; let to: [String]?
 }
 struct Room: Codable, Identifiable, Hashable {
     let id: String; let topic: String?; let participants: [String]?; let kind: String?
@@ -10,6 +15,10 @@ struct Room: Codable, Identifiable, Hashable {
     let seed: String?; let messages: [RoomMsg]?
 }
 struct RoomsPayload: Codable { let rooms: [Room]?; let board: [String]? }
+/// Rooms are pushed by this, not by `Room`. A Room's value changes on every poll — a new
+/// message, a different speaker — and a value-based push whose value no longer exists
+/// gets dropped by SwiftUI, which threw you out of the room mid-conversation.
+struct RoomRef: Hashable { let id: String }
 struct RoomPayload: Codable { let room: Room?; let speaking: String? }
 
 @MainActor final class RoomsModel: ObservableObject {
@@ -65,6 +74,19 @@ struct RoomPayload: Codable { let room: Room?; let speaking: String? }
         guard let (d, _) = try? await URLSession.shared.data(for: r),
               let p = try? JSONDecoder().decode(RoomPayload.self, from: d) else { return }
         room = p.room; speaking = p.speaking
+    }
+    /// Ask the room a closed question with any options you like.
+    func ask(_ question: String, _ options: [String]) async {
+        var r = URLRequest(url: URL(string: "\(Store.base)/rooms/\(id)/poll")!)
+        r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.setValue("FirmApp/4.3", forHTTPHeaderField: "User-Agent")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["question": question, "options": options])
+        guard let (d, resp) = try? await URLSession.shared.data(for: r) else { error = "Could not send"; return }
+        if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
+            let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+            error = (j?["error"] as? String) ?? "HTTP \(h.statusCode)"; return
+        }
+        await load()
     }
     func say(_ text: String) async {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines); guard !body.isEmpty else { return }
@@ -160,6 +182,7 @@ struct RoomView: View {
     @EnvironmentObject var store: Store
     @StateObject private var model: RoomModel
     @State private var draft = ""
+    @State private var showPoll = false
     init(roomId: String) { self.roomId = roomId; _model = StateObject(wrappedValue: RoomModel(id: roomId)) }
     var body: some View {
         VStack(spacing: 0) {
@@ -188,7 +211,9 @@ struct RoomView: View {
                 .onChange(of: model.speaking) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             }
             HStack(spacing: 10) {
-                TextField("Say something to the room…", text: $draft, axis: .vertical).lineLimit(1...5)
+                Button { showPoll = true } label: { Image(systemName: "checklist").font(.system(size: 20)) }
+                    .disabled(model.speaking != nil)
+                TextField("Say something, or @name one of them…", text: $draft, axis: .vertical).lineLimit(1...5)
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 Button {
@@ -213,6 +238,7 @@ struct RoomView: View {
             }
         }
         .onAppear { model.start() }.onDisappear { model.stop() }
+        .sheet(isPresented: $showPoll) { PollSheet { q, opts in Task { await model.ask(q, opts) } } }
         .alert("Could not send", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(model.error ?? "") }
     }
@@ -227,14 +253,17 @@ struct RoomBubble: View {
             if mine { Spacer(minLength: 40) }
             else if let a = store.agents.first(where: { $0.id == m.who }) { Avatar(agent: a, size: 26) }
             VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+                if let p = m.poll { PollCard(poll: p, store: store) }
                 if !mine {
                     Text((m.who ?? "").capitalized).font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.agentHue(m.who ?? ""))
                 }
+                if m.poll == nil {
                 Text(m.text ?? "").font(.system(size: 15)).foregroundStyle(mine ? .white : .primary)
                     .padding(.horizontal, 13).padding(.vertical, 9)
                     .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
                                 in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
                 Text(Fmt.when(m.at)).font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             if !mine { Spacer(minLength: 40) }
@@ -249,7 +278,7 @@ struct RoomsList: View {
     var body: some View {
         List {
             ForEach(model.rooms) { r in
-                NavigationLink(value: r) {
+                NavigationLink(value: RoomRef(id: r.id)) {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Image(systemName: r.kind == "board" ? "person.3.sequence.fill" : "bubble.left.and.bubble.right.fill")
@@ -277,5 +306,98 @@ struct RoomsList: View {
                     description: Text("Start one from an idea in your inbox — pick who should argue about it."))
             }
         }
+    }
+}
+
+
+struct PollCard: View {
+    let poll: Poll; let store: Store
+    private var tally: [(String, Int)] {
+        let counts = (poll.votes ?? [:]).values.reduce(into: [String: Int]()) { $0[$1.choice ?? "—", default: 0] += 1 }
+        return (poll.options ?? []).map { ($0, counts[$0] ?? 0) }
+    }
+    private var total: Int { max(1, (poll.votes ?? [:]).count) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(poll.question ?? "").font(.system(size: 15, weight: .semibold))
+            ForEach(tally, id: \.0) { opt, n in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack { Text(opt).font(.system(size: 14)); Spacer()
+                        Text("\(n)").font(.system(size: 14, weight: .semibold)).monospacedDigit() }
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.secondary.opacity(0.15))
+                            Capsule().fill(Color.accentColor)
+                                .frame(width: max(4, g.size.width * CGFloat(n) / CGFloat(total)))
+                        }
+                    }.frame(height: 7)
+                }
+            }
+            if let v = poll.votes, !v.isEmpty {
+                Divider().padding(.vertical, 2)
+                ForEach(v.sorted(by: { $0.key < $1.key }), id: \.key) { who, vote in
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(who.capitalized).font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.agentHue(who))
+                            Text(vote.choice ?? "").font(.system(size: 12, weight: .medium))
+                        }
+                        Text(vote.why ?? "").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct PollSheet: View {
+    var onAsk: (String, [String]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var question = ""
+    @State private var options: [String] = ["", ""]
+    private let presets: [(String, [String])] = [
+        ("Go / No-go", ["Go", "No-go"]),
+        ("Yes / No / Needs work", ["Yes", "No", "Needs work"]),
+        ("Now / Later / Never", ["Now", "Later", "Never"]),
+    ]
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Question") {
+                    TextField("What do you want them to decide?", text: $question, axis: .vertical).lineLimit(1...3)
+                }
+                Section("Quick sets") {
+                    ForEach(presets, id: \.0) { name, opts in
+                        Button(name) { options = opts; UISelectionFeedbackGenerator().selectionChanged() }
+                    }
+                }
+                Section("Options") {
+                    ForEach(options.indices, id: \.self) { i in
+                        HStack {
+                            TextField("Option \(i + 1)", text: Binding(get: { options[i] }, set: { options[i] = $0 }))
+                            if options.count > 2 {
+                                Button { options.remove(at: i) } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    if options.count < 6 { Button("Add an option") { options.append("") } }
+                }
+            }
+            .navigationTitle("Ask the room").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Ask") {
+                        onAsk(question.trimmingCharacters(in: .whitespaces),
+                              options.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+                        dismiss()
+                    }.disabled(options.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count < 2)
+                }
+            }
+        }.presentationDetents([.large])
     }
 }

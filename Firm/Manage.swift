@@ -30,6 +30,11 @@ struct ManageView: View {
                 CapRow(title: "Amalie may publish per day", note: "Listings she can take live before asking you",
                        key: "publish_daily_cap", text: $pubCap, saving: $saving, saved: $saved, error: $error, step: 1)
             }
+            Section {
+                NavigationLink(value: "providers") {
+                    Label("Models & usage", systemImage: "cpu")
+                }
+            }
             Section("Notifications") {
                 HStack { Text("Push to this phone"); Spacer()
                     Text(pushOn ? "On" : "Off").foregroundStyle(pushOn ? .green : .secondary) }

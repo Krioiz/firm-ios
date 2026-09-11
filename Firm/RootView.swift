@@ -41,8 +41,16 @@ struct RootView: View {
                 .navigationDestination(for: Product.self) { ProductDetail(p: $0) }
                 .navigationDestination(for: Listing.self) { ListingDetail(l: $0) }
                 .navigationDestination(for: Conversation.self) { ChatView(agent: $0.agent) }
-                .navigationDestination(for: String.self) { if $0 == "inbox" { InboxView() } }
-                .navigationDestination(for: Room.self) { RoomView(roomId: $0.id) }
+                .navigationDestination(for: String.self) { key in
+                    // exactly one String destination: two of them collide and SwiftUI
+                    // silently pushes an empty view
+                    switch key {
+                    case "inbox": InboxView()
+                    case "providers": ProvidersView()
+                    default: EmptyView()
+                    }
+                }
+                .navigationDestination(for: RoomRef.self) { RoomView(roomId: $0.id) }
                 .refreshable { await store.refresh() }
         }
     }

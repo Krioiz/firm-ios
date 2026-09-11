@@ -62,9 +62,12 @@ struct InboxView: View {
     @State private var rejecting: InboxItem? = nil
     @State private var reason = ""
     @State private var discussing: InboxItem? = nil
-    @State private var goToRoom: Room? = nil
+    @State private var goToRoom: RoomRef? = nil
     var body: some View {
         List {
+            if let ref = goToRoom {
+                NavigationLink(value: ref) { Label("Open the discussion", systemImage: "person.3.fill") }
+            }
             ForEach(model.items) { item in
                 InboxCard(item: item, busy: model.busy.contains(item.id),
                           agent: store.agents.first { $0.id == item.agent },
@@ -86,10 +89,10 @@ struct InboxView: View {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
         .sheet(item: $discussing) { item in
-            NewRoomSheet(topic: item.title ?? "Idea", seed: item.detail ?? "") { room in goToRoom = room }
+            NewRoomSheet(topic: item.title ?? "Idea", seed: item.detail ?? "") { room in goToRoom = RoomRef(id: room.id) }
                 .environmentObject(store)
         }
-        .navigationDestination(item: $goToRoom) { RoomView(roomId: $0.id) }
+
         .sheet(item: $rejecting) { item in
             NavigationStack {
                 Form {

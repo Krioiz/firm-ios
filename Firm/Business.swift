@@ -31,13 +31,19 @@ struct BusinessView: View {
 final class ImageCache {
     static let shared = ImageCache()
     private let cache = NSCache<NSURL, UIImage>()
-    init() { cache.totalCostLimit = 80 * 1024 * 1024 }
+    init() { cache.totalCostLimit = 40 * 1024 * 1024; cache.countLimit = 60 }
     func image(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
-    func set(_ img: UIImage, _ url: URL) { cache.setObject(img, forKey: url as NSURL, cost: img.jpegData(compressionQuality: 1)?.count ?? 0) }
+    func set(_ img: UIImage, _ url: URL) {
+        // cost from the pixels, not by re-encoding: measuring a 14MB image by turning it
+        // back into a JPEG was slower than drawing it
+        let cost = Int(img.size.width * img.scale * img.size.height * img.scale * 4)
+        cache.setObject(img, forKey: url as NSURL, cost: cost)
+    }
 }
 struct CachedImage: View {
     let url: URL?
     var contentMode: ContentMode = .fill
+    var maxWidth: CGFloat = 400
     @State private var img: UIImage? = nil
     var body: some View {
         ZStack {
@@ -50,10 +56,14 @@ struct CachedImage: View {
         }
         .task(id: url) {
             guard let url else { return }
-            if let hit = ImageCache.shared.image(url) { img = hit; return }
-            var r = URLRequest(url: url); r.cachePolicy = .returnCacheDataElseLoad
+            // ask the server for a thumbnail rather than the 1600x2400 original: twenty of
+            // those decoded at full size is ~375MB and iOS kills the app long before that
+            let thumb = URL(string: "\(Store.base)/thumb?src=\(url.path)&w=\(Int(maxWidth))")
+                ?? url
+            if let hit = ImageCache.shared.image(thumb) { img = hit; return }
+            var r = URLRequest(url: thumb); r.cachePolicy = .returnCacheDataElseLoad
             guard let (d, _) = try? await URLSession.shared.data(for: r), let ui = UIImage(data: d) else { return }
-            ImageCache.shared.set(ui, url)
+            ImageCache.shared.set(ui, thumb)
             await MainActor.run { img = ui }
         }
     }
