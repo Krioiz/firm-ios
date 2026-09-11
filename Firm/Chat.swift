@@ -160,19 +160,7 @@ struct ChatView: View {
             if let q = mentionQuery {
                 let matches = store.agents.filter { $0.id != agent.id && (q.isEmpty || $0.id.hasPrefix(q.lowercased())) }
                 if !matches.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(matches) { a in
-                                Button {
-                                    complete(a.id); UISelectionFeedbackGenerator().selectionChanged()
-                                } label: {
-                                    HStack(spacing: 6) { Avatar(agent: a, size: 22); Text(a.display).font(.system(size: 14, weight: .medium)) }
-                                        .padding(.horizontal, 10).padding(.vertical, 6)
-                                        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                                }.buttonStyle(.plain)
-                            }
-                        }.padding(.horizontal, 16).padding(.vertical, 8)
-                    }.background(.bar)
+                    MentionBar(ids: matches.map(\.id), store: store) { complete($0) }
                 }
             }
             HStack(spacing: 10) {

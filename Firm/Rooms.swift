@@ -265,22 +265,7 @@ struct RoomView: View {
             if let q = mentionQuery {
                 let people = (model.room?.participants ?? []).filter { q.isEmpty || $0.hasPrefix(q.lowercased()) }
                 if !people.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(people, id: \.self) { id in
-                                Button {
-                                    complete(id); UISelectionFeedbackGenerator().selectionChanged()
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        if let a = store.agents.first(where: { $0.id == id }) { Avatar(agent: a, size: 22) }
-                                        Text(id.capitalized).font(.system(size: 14, weight: .medium))
-                                    }
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                                }.buttonStyle(.plain)
-                            }
-                        }.padding(.horizontal, 16).padding(.vertical, 8)
-                    }.background(.bar)
+                    MentionBar(ids: people, store: store) { complete($0) }
                 }
             }
             HStack(spacing: 10) {
