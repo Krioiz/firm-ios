@@ -69,6 +69,7 @@ struct RootView: View {
                     case "inbox": InboxView()
                     case "providers": ProvidersView()
                     case "log": LogView()
+                    case "elliot": ElliotView()
                     default: EmptyView()
                     }
                 }

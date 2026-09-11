@@ -24,8 +24,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.firm
-        MARKETING_VERSION: "5.4"
-        CURRENT_PROJECT_VERSION: "23"
+        MARKETING_VERSION: "6.0"
+        CURRENT_PROJECT_VERSION: "24"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: UW5CPP8BY5

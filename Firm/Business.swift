@@ -8,7 +8,8 @@ struct BusinessView: View {
     var body: some View {
         VStack(spacing: 0) {
             Picker("", selection: $seg) {
-                Text("Shop").tag(0); Text("Pipeline").tag(1); Text("Money").tag(2)
+                Text("Shop").tag(0); Text("Pipeline").tag(1)
+                Text("Luther").tag(2); Text("Elliot").tag(3)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
@@ -17,12 +18,13 @@ struct BusinessView: View {
                 switch seg {
                 case 0: ShopView()
                 case 1: PipelineView()
-                default: MoneyView()
+                case 2: MoneyView()
+                default: ElliotView()
                 }
             }
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle(seg == 0 ? "Shop" : seg == 1 ? "Pipeline" : "Luther")
+        .navigationTitle(["Shop", "Pipeline", "Luther", "Elliot"][min(max(seg, 0), 3)])
     }
 }
 
