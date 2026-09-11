@@ -10,7 +10,7 @@ struct Tile: View {
             Image(systemName: icon).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 30, height: 30).background(tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).padding(.top, 10)
-            Text(value).font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit().padding(.top, 2)
+            Text(value).font(.system(size: 25, weight: .bold)).monospacedDigit().padding(.top, 2)
             if let foot { Text(foot).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).padding(.top, 4) }
             Spacer(minLength: 0)
         }
@@ -162,7 +162,7 @@ struct LutherHero: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Luther · paper book").font(.system(size: 12, weight: .medium)).textCase(.uppercase)
                 .kerning(0.6).foregroundStyle(.secondary)
-            Text(Fmt.money(sel?.equity ?? l.equity)).font(.system(size: 40, weight: .heavy, design: .rounded))
+            Text(Fmt.money(sel?.equity ?? l.equity)).font(.system(size: 40, weight: .bold))
                 .monospacedDigit().padding(.top, 2)
             HStack(spacing: 10) {
                 Pill(text: "\(up ? "▲" : "▼") \(Fmt.money(abs(l.total_pnl ?? 0))) (\(String(format: "%+.2f", l.total_pnl_pct ?? 0))%)", tint: up ? .green : .red)

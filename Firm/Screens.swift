@@ -39,6 +39,13 @@ struct AgentRow: View {
 struct AgentDetail: View {
     let a: Agent
     @EnvironmentObject var store: Store
+    @StateObject private var prov = ProvidersModel()
+    @State private var picking = false
+    private var mine: AgentModel? { prov.payload?.agents?.first { $0.agent == a.id } }
+    private var shortModel: String {
+        guard let m = mine?.model else { return "loading…" }
+        return m.split(separator: "/").last.map(String.init) ?? m
+    }
     var body: some View {
         let bot = store.bots.first { $0.agent == a.id }
         List {
@@ -69,7 +76,38 @@ struct AgentDetail: View {
                     } else { Text("none").foregroundStyle(.secondary) }
                 }
             }
-        }.navigationTitle(a.display).navigationBarTitleDisplayMode(.inline)
+            Section {
+                Button { picking = true } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Model").foregroundStyle(.primary)
+                            Text(shortModel).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if prov.busy == a.id { ProgressView() }
+                        else { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
+                    }
+                }
+                if let f = mine?.fallbacks, !f.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Falls back to").font(.caption).foregroundStyle(.secondary)
+                        ForEach(f, id: \.self) { Text($0.split(separator: "/").last.map(String.init) ?? $0)
+                            .font(.system(size: 12, design: .monospaced)).foregroundStyle(.tertiary) }
+                    }
+                }
+            } header: { Text("Which model it runs on") }
+        }
+        .navigationTitle(a.display).navigationBarTitleDisplayMode(.inline)
+        .task { await prov.load() }
+        .sheet(isPresented: $picking) {
+            if let m = mine {
+                ModelPicker(agent: m, models: prov.payload?.models ?? []) { chosen in
+                    Task { await prov.setModel(a.id, chosen) }
+                }
+            }
+        }
+        .alert("Could not change it", isPresented: .init(get: { prov.error != nil }, set: { _ in prov.error = nil })) {
+            Button("OK", role: .cancel) {} } message: { Text(prov.error ?? "") }
     }
 }
 

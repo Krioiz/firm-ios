@@ -7,6 +7,7 @@ struct ManageView: View {
     @State private var spendCap = ""; @State private var agentCap = ""; @State private var pubCap = ""
     @State private var saving: String? = nil; @State private var saved: String? = nil; @State private var error: String? = nil
     @State private var pushOn = false
+    @StateObject private var prov = ProvidersModel()
     var body: some View {
         List {
             Section("Appearance") {
@@ -30,10 +31,12 @@ struct ManageView: View {
                 CapRow(title: "Amalie may publish per day", note: "Listings she can take live before asking you",
                        key: "publish_daily_cap", text: $pubCap, saving: $saving, saved: $saved, error: $error, step: 1)
             }
-            Section {
-                NavigationLink(value: "providers") {
-                    Label("Models & usage", systemImage: "cpu")
+            Section("Subscriptions") {
+                ForEach(["chatgpt", "claude"], id: \.self) { key in
+                    if let p = prov.payload?.providers?[key] { UsageRow(name: key, p: p) }
                 }
+                if prov.payload == nil { HStack { ProgressView().controlSize(.small); Text("Checking…").foregroundStyle(.secondary) } }
+                NavigationLink(value: "providers") { Label("Models for each agent", systemImage: "cpu") }
             }
             Section("Notifications") {
                 HStack { Text("Push to this phone"); Spacer()
@@ -62,6 +65,7 @@ struct ManageView: View {
                 .font(.caption).foregroundStyle(.secondary) }
         }
         .navigationTitle("Manage")
+        .task { await prov.load() }
         .onAppear {
             spendCap = fmt(store.settings?.limits?.daily_total_spend_cap)
             agentCap = fmt(store.settings?.limits?.per_agent_daily_cap)

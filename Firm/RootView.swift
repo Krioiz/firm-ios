@@ -79,7 +79,7 @@ struct ApproveScreen: View {
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 36)
                 if let c = code {
                     Text(c.prefix(3) + " " + c.suffix(3))
-                        .font(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit().padding(.top, 8)
+                        .font(.system(size: 44, weight: .bold)).monospacedDigit().padding(.top, 8)
                     Text("Valid for 10 minutes").font(.caption).foregroundStyle(.tertiary)
                 } else { ProgressView().padding(.top, 8) }
             }
