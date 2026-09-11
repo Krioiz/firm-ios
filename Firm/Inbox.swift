@@ -89,7 +89,10 @@ struct InboxView: View {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
         .sheet(item: $discussing) { item in
-            NewRoomSheet(topic: item.title ?? "Idea", seed: item.detail ?? "") { room in goToRoom = RoomRef(id: room.id) }
+            NewRoomSheet(topic: item.title ?? "Idea", seed: item.detail ?? "",
+                         source: (agent: item.agent ?? "", slug: item.slug ?? "")) { room in
+                goToRoom = RoomRef(id: room.id)
+            }
                 .environmentObject(store)
         }
 
