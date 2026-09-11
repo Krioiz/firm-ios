@@ -9,6 +9,19 @@ struct RoomMsg: Codable, Identifiable, Hashable {
     let role: String?; let who: String?; let text: String?; let at: String?
     let poll: Poll?; let to: [String]?
 }
+/// A message someone made in the room, waiting to become the verdict on the idea.
+struct PendingVerdict: Identifiable {
+    let id = UUID()
+    let msg: RoomMsg
+    let reject: Bool
+    var who: String { msg.who ?? "" }
+    var role: ButtonRole? { reject ? .destructive : nil }
+    var buttonTitle: String {
+        let name = who.capitalized
+        return reject ? "Reject, using \(name)'s reason" : "Keep, using \(name)'s reason"
+    }
+}
+
 struct RoomSource: Codable, Hashable { let agent: String?; let slug: String? }
 struct Room: Codable, Identifiable, Hashable {
     let id: String; let topic: String?; let participants: [String]?; let kind: String?
@@ -193,8 +206,7 @@ struct RoomView: View {
     @State private var mentionQuery: String? = nil
     @State private var rejecting: RoomMsg? = nil
     @State private var rejectReason = ""
-    @State private var verdicting: RoomMsg? = nil
-    @State private var keeping: RoomMsg? = nil
+    @State private var pending: PendingVerdict? = nil
     @State private var verdictNote: String? = nil
     init(roomId: String) { self.roomId = roomId; _model = StateObject(wrappedValue: RoomModel(id: roomId)) }
     var body: some View {
@@ -219,10 +231,14 @@ struct RoomView: View {
                                             Label("Reply to \(who.capitalized)", systemImage: "arrowshape.turn.up.left")
                                         }
                                         if model.room?.source != nil {
-                                            Button(role: .destructive) { verdicting = m } label: {
+                                            Button(role: .destructive) {
+                                                pending = PendingVerdict(msg: m, reject: true)
+                                            } label: {
                                                 Label("Reject the idea, using this", systemImage: "hand.thumbsdown")
                                             }
-                                            Button { keeping = m } label: {
+                                            Button {
+                                                pending = PendingVerdict(msg: m, reject: false)
+                                            } label: {
                                                 Label("Keep the idea, using this", systemImage: "hand.thumbsup")
                                             }
                                         }
@@ -301,22 +317,17 @@ struct RoomView: View {
         }
         .onAppear { model.start() }.onDisappear { model.stop() }
         .sheet(isPresented: $showPoll) { PollSheet { q, opts in Task { await model.ask(q, opts) } } }
-        .confirmationDialog("Reject the idea?",
-            isPresented: .init(get: { verdicting != nil }, set: { if !$0 { verdicting = nil } }),
-            titleVisibility: .visible, presenting: verdicting) { m in
-            Button("Reject, with \((m.who ?? "").capitalized)’s reason", role: .destructive) {
-                Task { await sendVerdict(reject: true, reason: m.text ?? "", who: m.who ?? "") }
-            }
-        } message: { m in Text(m.text ?? "") }
-        .confirmationDialog("Keep the idea?",
-            isPresented: .init(get: { keeping != nil }, set: { if !$0 { keeping = nil } }),
-            titleVisibility: .visible, presenting: keeping) { m in
-            Button("Keep, with \((m.who ?? "").capitalized)’s reason") {
-                Task { await sendVerdict(reject: false, reason: m.text ?? "", who: m.who ?? "") }
-            }
-        } message: { m in Text(m.text ?? "") }
-        .alert("Done", isPresented: .init(get: { verdictNote != nil }, set: { _ in verdictNote = nil })) {
-            Button("OK", role: .cancel) {} } message: { Text(verdictNote ?? "") }
+        .confirmationDialog(pendingTitle, isPresented: pendingShown,
+                            titleVisibility: .visible, presenting: pending) { p in
+            Button(p.buttonTitle, role: p.role) { Task { await sendVerdict(p) } }
+        } message: { p in
+            Text(p.msg.text ?? "")
+        }
+        .alert("Done", isPresented: noteShown) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(verdictNote ?? "")
+        }
         .sheet(item: $rejecting) { m in
             NavigationStack {
                 Form {
@@ -348,10 +359,24 @@ struct RoomView: View {
             Button("OK", role: .cancel) {} } message: { Text(model.error ?? "") }
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.speaking == nil }
+    private var pendingShown: Binding<Bool> {
+        Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
+    }
+    private var noteShown: Binding<Bool> {
+        Binding(get: { verdictNote != nil }, set: { if !$0 { verdictNote = nil } })
+    }
+    private var pendingTitle: String {
+        guard let p = pending else { return "" }
+        return p.reject ? "Reject the idea?" : "Keep the idea?"
+    }
+
     /// Settle the idea this room was started from, using an agent's own words as the reason.
-    private func sendVerdict(reject: Bool, reason: String, who: String) async {
+    private func sendVerdict(_ p: PendingVerdict) async {
         guard let src = model.room?.source, let agent = src.agent, let slug = src.slug else { return }
-        verdicting = nil; keeping = nil
+        let who = p.who
+        let reason = p.msg.text ?? ""
+        let reject = p.reject
+        pending = nil
         var r = URLRequest(url: URL(string: "\(Store.base)/agents/\(agent)/ideas/\(slug)/verdict")!)
         r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.setValue("FirmApp/4.6", forHTTPHeaderField: "User-Agent")
