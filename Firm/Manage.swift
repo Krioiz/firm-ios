@@ -10,10 +10,12 @@ struct ManageView: View {
     @StateObject private var prov = ProvidersModel()
     var body: some View {
         List {
-            Section("Activity") {
+            Section {
                 NavigationLink(value: "log") {
                     Label("Log", systemImage: "list.bullet.rectangle")
                 }
+            } header: {
+                Text("Activity")
             } footer: {
                 Text("Everything the agents did, including what failed. Searchable.")
             }

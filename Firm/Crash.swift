@@ -47,10 +47,10 @@ enum Crash {
     }
 
     /// Send whatever the last death left behind, then clear it.
-    static func reportIfAny() {
+    @MainActor static func reportIfAny() {
         guard let text = try? String(contentsOf: file, encoding: .utf8), !text.isEmpty else { return }
         try? FileManager.default.removeItem(at: file)
-        var r = URLRequest(url: URL(string: "\(Store.base)/crash")!)
+        var r = URLRequest(url: URL(string: "https://getstubbie.com/dashboard/crash")!)
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
