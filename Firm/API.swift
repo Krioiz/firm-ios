@@ -74,7 +74,7 @@ struct Product: Codable, Identifiable, Hashable {
 struct Products: Codable { let posters: [Product]?; let packs: [Product]? }
 struct Alert: Codable, Identifiable, Hashable { var id: String { (at ?? "") + (title ?? "") }; let at: String?; let title: String?; let body: String? }
 struct Alerts: Codable { let alerts: [Alert]? }
-struct Limits: Codable { let daily_total_spend_cap: Double?; let per_agent_daily_cap: Double?; let publish_daily_cap: Double? }
+struct Limits: Codable, Equatable { let daily_total_spend_cap: Double?; let per_agent_daily_cap: Double?; let publish_daily_cap: Double? }
 struct DeviceRow: Codable, Identifiable, Hashable { var id: String { name ?? "" }; let name: String?; let created: String?; let lastUsed: String? }
 struct TimerRow: Codable, Identifiable, Hashable { var id: String { unit ?? "" }; let unit: String?; let next: String? }
 struct Settings: Codable { let limits: Limits?; let devices: [DeviceRow]?; let timers: [TimerRow]? }
@@ -166,6 +166,10 @@ struct History: Codable { let days: [Day]? }
 
 // formatting shared across the app
 enum Fmt {
+    /// A number with no trailing .00 — for limits and bounds, not money.
+    static func plain(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(format: "%g", v)
+    }
     static func money(_ v: Double?) -> String {
         let n = v ?? 0
         return (n < 0 ? "-$" : "$") + String(format: "%.2f", abs(n))

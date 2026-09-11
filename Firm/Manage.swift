@@ -5,6 +5,7 @@ struct ManageView: View {
     @EnvironmentObject var store: Store
     @AppStorage("theme") private var theme = "system"
     @State private var spendCap = ""; @State private var agentCap = ""; @State private var pubCap = ""
+    @State private var lastServer: (String, String, String) = ("", "", "")
     @State private var saving: String? = nil; @State private var saved: String? = nil; @State private var error: String? = nil
     @State private var pushOn = false
     @StateObject private var prov = ProvidersModel()
@@ -76,15 +77,25 @@ struct ManageView: View {
         .navigationTitle("Manage")
         .task { await prov.load() }
         .onAppear {
-            spendCap = fmt(store.settings?.limits?.daily_total_spend_cap)
-            agentCap = fmt(store.settings?.limits?.per_agent_daily_cap)
-            pubCap = fmt(store.settings?.limits?.publish_daily_cap)
+            fillCaps()
             UNUserNotificationCenter.current().getNotificationSettings { s in
                 DispatchQueue.main.async { pushOn = s.authorizationStatus == .authorized }
             }
         }
+        // The screen can open before the settings have arrived, which used to leave the
+        // boxes blank — and saving a blank box reported "Not a number" as if Marco had
+        // typed something wrong. Fill them in whenever the real values land.
+        .onChange(of: store.settings?.limits) { _, _ in fillCaps() }
         .alert("Could not save", isPresented: .init(get: { error != nil }, set: { _ in error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(error ?? "") }
+    }
+    /// Only overwrite a box the user has not typed into.
+    private func fillCaps() {
+        let l = store.settings?.limits
+        if spendCap.isEmpty || spendCap == lastServer.0 { spendCap = fmt(l?.daily_total_spend_cap) }
+        if agentCap.isEmpty || agentCap == lastServer.1 { agentCap = fmt(l?.per_agent_daily_cap) }
+        if pubCap.isEmpty   || pubCap   == lastServer.2 { pubCap   = fmt(l?.publish_daily_cap) }
+        lastServer = (fmt(l?.daily_total_spend_cap), fmt(l?.per_agent_daily_cap), fmt(l?.publish_daily_cap))
     }
     private func fmt(_ v: Double?) -> String { guard let v else { return "" }
         return v == v.rounded() ? String(Int(v)) : String(format: "%.2f", v) }
@@ -96,6 +107,29 @@ struct ManageView: View {
 
 struct CapRow: View {
     let title: String; let note: String; let key: String
+    /// Danish keyboards give a comma; the server only understands a dot.
+    private var value: Double? {
+        let t = text.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        return t.isEmpty ? nil : Double(t)
+    }
+    private var bounds: (Double, Double)? {
+        switch key {
+        case "daily_total_spend_cap": return (0.5, 100)
+        case "per_agent_daily_cap": return (1, 100)
+        case "publish_daily_cap": return (0, 50)
+        default: return nil
+        }
+    }
+    /// What the server currently holds, so a Save that would change nothing stays dim.
+    private var current: Double? {
+        switch key {
+        case "daily_total_spend_cap": return store.settings?.limits?.daily_total_spend_cap
+        case "per_agent_daily_cap": return store.settings?.limits?.per_agent_daily_cap
+        case "publish_daily_cap": return store.settings?.limits?.publish_daily_cap
+        default: return nil
+        }
+    }
+    private var changed: Bool { value != current }
     @Binding var text: String
     @Binding var saving: String?; @Binding var saved: String?; @Binding var error: String?
     let step: Double
@@ -112,7 +146,11 @@ struct CapRow: View {
                     .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 Button {
                     focused = false
-                    guard let v = Double(text.replacingOccurrences(of: ",", with: ".")) else { error = "Not a number"; return }
+                    guard let v = value else { error = "Type a number first"; return }
+                    if let (lo, hi) = bounds, v < lo || v > hi {
+                        error = "\(title) has to be between \(Fmt.plain(lo)) and \(Fmt.plain(hi))"
+                        UINotificationFeedbackGenerator().notificationOccurred(.error); return
+                    }
                     saving = key
                     Task {
                         let err = await store.saveCap(key, v)
@@ -127,6 +165,7 @@ struct CapRow: View {
                     else { Text("Save").frame(width: 58) }
                 }
                 .buttonStyle(.borderedProminent).tint(saved == key ? .green : .accentColor)
+                .disabled(saving != nil || value == nil || !changed)
                 Spacer()
             }
         }.padding(.vertical, 4)
