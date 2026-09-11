@@ -129,9 +129,6 @@ struct ChatView: View {
     let agent: Agent
     @EnvironmentObject var store: Store
     @StateObject private var model: ChatModel
-    @State private var draft = ""
-    @State private var mentionQuery: String? = nil
-    @FocusState private var focused: Bool
 
     init(agent: Agent) { self.agent = agent; _model = StateObject(wrappedValue: ChatModel(agent: agent.id)) }
 
@@ -175,29 +172,9 @@ struct ChatView: View {
                     }
                 }
             }
-            if let q = mentionQuery {
-                let matches = store.agents.filter { $0.id != agent.id && (q.isEmpty || $0.id.hasPrefix(q.lowercased())) }
-                if !matches.isEmpty {
-                    MentionBar(ids: matches.map(\.id), store: store) { complete($0) }
-                }
+            ChatComposer(agent: agent, store: store, blocked: model.sending || model.pending) { t in
+                Task { await model.send(t) }
             }
-            HStack(spacing: 10) {
-                TextField("Message \(agent.display)…", text: $draft, axis: .vertical)
-                    .lineLimit(1...5).focused($focused)
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .onChange(of: draft) { _, v in updateMention(v) }
-                Button {
-                    let t = draft; draft = ""; mentionQuery = nil
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await model.send(t) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
-                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.4))
-                }.disabled(!canSend)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.bar)
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle(agent.display).navigationBarTitleDisplayMode(.inline)
@@ -215,18 +192,6 @@ struct ChatView: View {
         .alert("Could not send", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
-    }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.sending && !model.pending }
-    private func updateMention(_ v: String) {
-        // an @ that is still being typed opens the picker
-        guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
-        let tail = v[v.index(after: at)...]
-        mentionQuery = tail.contains(" ") ? nil : String(tail)
-    }
-    private func complete(_ id: String) {
-        guard let at = draft.lastIndex(of: "@") else { return }
-        draft = String(draft[..<at]) + "@" + id + " "
-        mentionQuery = nil
     }
 }
 
@@ -286,5 +251,66 @@ struct TypingDots: View {
         .background(scale == 1 ? AnyShapeStyle(Color(.secondarySystemGroupedBackground)) : AnyShapeStyle(Color.clear),
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onReceive(t) { _ in withAnimation(.easeInOut(duration: 0.2)) { phase = (phase + 1) % 3 } }
+    }
+}
+
+
+/// Same reason as RoomComposer: what you are typing stays down here, so a keystroke does
+/// not redraw the entire conversation above it.
+struct ChatComposer: View {
+    let agent: Agent
+    let store: Store
+    let blocked: Bool
+    var onSend: (String) -> Void
+
+    @State private var draft = ""
+    @State private var mentionQuery: String? = nil
+    @FocusState private var focused: Bool
+
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !blocked
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let q = mentionQuery {
+                let matches = store.agents.filter {
+                    $0.id != agent.id && (q.isEmpty || $0.id.hasPrefix(q.lowercased()))
+                }
+                if !matches.isEmpty {
+                    MentionBar(ids: matches.map(\.id), store: store) { complete($0) }
+                }
+            }
+            HStack(spacing: 10) {
+                TextField("Message \(agent.display)…", text: $draft, axis: .vertical)
+                    .lineLimit(1...5).focused($focused)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Color(.secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .onChange(of: draft) { _, v in
+                        // an @ that is still being typed opens the picker
+                        guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
+                        let tail = v[v.index(after: at)...]
+                        mentionQuery = tail.contains(" ") ? nil : String(tail)
+                    }
+                Button {
+                    let t = draft
+                    draft = ""; mentionQuery = nil
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onSend(t)
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.4))
+                }.disabled(!canSend)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.bar)
+        }
+    }
+
+    private func complete(_ id: String) {
+        guard let at = draft.lastIndex(of: "@") else { return }
+        draft = String(draft[..<at]) + "@" + id + " "
+        mentionQuery = nil
     }
 }

@@ -214,9 +214,9 @@ struct RoomView: View {
     let roomId: String
     @EnvironmentObject var store: Store
     @StateObject private var model: RoomModel
-    @State private var draft = ""
     @State private var showPoll = false
-    @State private var mentionQuery: String? = nil
+    /// Text the transcript wants dropped into the composer, e.g. "@lui ".
+    @State private var prefill: String? = nil
     @State private var rejecting: RoomMsg? = nil
     @State private var rejectReason = ""
     @State private var pending: PendingVerdict? = nil
@@ -242,7 +242,7 @@ struct RoomView: View {
                                         Label("Copy", systemImage: "doc.on.doc")
                                     }
                                     if let who = m.who, who != "marco" {
-                                        Button { draft = "@\(who) " } label: {
+                                        Button { prefill = "@\(who) " } label: {
                                             Label("Reply to \(who.capitalized)", systemImage: "arrowshape.turn.up.left")
                                         }
                                         if model.room?.source != nil {
@@ -289,31 +289,10 @@ struct RoomView: View {
                     }
                 }
             }
-            if let q = mentionQuery {
-                let people = (model.room?.participants ?? []).filter { q.isEmpty || $0.hasPrefix(q.lowercased()) }
-                if !people.isEmpty {
-                    MentionBar(ids: people, store: store) { complete($0) }
-                }
-            }
-            HStack(spacing: 10) {
-                Button { showPoll = true } label: { Image(systemName: "checklist").font(.system(size: 20)) }
-                TextField("Say something, or @name one of them…", text: $draft, axis: .vertical).lineLimit(1...5)
-                    .onChange(of: draft) { _, v in
-                        guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
-                        let tail = v[v.index(after: at)...]
-                        mentionQuery = tail.contains(" ") ? nil : String(tail)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                Button {
-                    let t = draft; draft = ""; mentionQuery = nil
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await model.say(t) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
-                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.4))
-                }.disabled(!canSend)
-            }.padding(.horizontal, 12).padding(.vertical, 8).background(.bar)
+            RoomComposer(participants: model.room?.participants ?? [],
+                         store: store, prefill: $prefill,
+                         onSend: { t in Task { await model.say(t) } },
+                         onPoll: { showPoll = true })
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle(model.room?.topic ?? "Room").navigationBarTitleDisplayMode(.inline)
@@ -369,7 +348,6 @@ struct RoomView: View {
         .alert("Could not send", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(model.error ?? "") }
     }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var pendingShown: Binding<Bool> {
         Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
     }
@@ -403,11 +381,6 @@ struct RoomView: View {
             ? "Rejected, with \(who.capitalized)’s reason. It is out of your inbox."
             : "Kept, with \(who.capitalized)’s reason."
         await model.say("Noted — I have \(reject ? "rejected" : "kept") this, using \(who.capitalized)’s reasoning.")
-    }
-    private func complete(_ id: String) {
-        guard let at = draft.lastIndex(of: "@") else { return }
-        draft = String(draft[..<at]) + "@" + id + " "
-        mentionQuery = nil
     }
 }
 
@@ -650,5 +623,73 @@ struct RoundStatus: View {
                 Spacer()
             }
         }
+    }
+}
+
+
+/// The composer owns what you are typing, and nothing else does.
+///
+/// While `draft` was a piece of RoomView's own state, every single keystroke re-evaluated
+/// that whole view — the scroll reader, every message bubble, every context menu attached
+/// to them, the sheets and the toolbar. In a room with a real conversation in it that is
+/// far too much work per character, and the interface simply stopped responding. Keeping
+/// the text down here means typing redraws the text field and nothing above it.
+struct RoomComposer: View {
+    let participants: [String]
+    let store: Store
+    @Binding var prefill: String?
+    var onSend: (String) -> Void
+    var onPoll: () -> Void
+
+    @State private var draft = ""
+    @State private var mentionQuery: String? = nil
+
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let q = mentionQuery {
+                let people = participants.filter { q.isEmpty || $0.hasPrefix(q.lowercased()) }
+                if !people.isEmpty {
+                    MentionBar(ids: people, store: store) { complete($0) }
+                }
+            }
+            HStack(spacing: 10) {
+                Button(action: onPoll) {
+                    Image(systemName: "checklist").font(.system(size: 20))
+                }
+                TextField("Say something, or @name one of them…", text: $draft, axis: .vertical)
+                    .lineLimit(1...5)
+                    .onChange(of: draft) { _, v in
+                        guard let at = v.lastIndex(of: "@") else { mentionQuery = nil; return }
+                        let tail = v[v.index(after: at)...]
+                        mentionQuery = tail.contains(" ") ? nil : String(tail)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Color(.secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                Button {
+                    let t = draft
+                    draft = ""; mentionQuery = nil
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onSend(t)
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.4))
+                }.disabled(!canSend)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8).background(.bar)
+        }
+        .onChange(of: prefill) { _, v in
+            guard let v, !v.isEmpty else { return }
+            draft = draft.isEmpty ? v : draft + " " + v
+            prefill = nil
+        }
+    }
+
+    private func complete(_ id: String) {
+        guard let at = draft.lastIndex(of: "@") else { return }
+        draft = String(draft[..<at]) + "@" + id + " "
+        mentionQuery = nil
     }
 }
