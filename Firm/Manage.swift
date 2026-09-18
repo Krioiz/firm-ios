@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 import UserNotifications
 
 struct ManageView: View {
@@ -6,6 +7,7 @@ struct ManageView: View {
     @AppStorage("theme") private var theme = "system"
     @State private var spendCap = ""; @State private var agentCap = ""; @State private var pubCap = ""
     @State private var lastServer: (String, String, String) = ("", "", "")
+    @State private var approveCode = ""; @State private var approving = false; @State private var approveNote: String? = nil
     @State private var saving: String? = nil; @State private var saved: String? = nil; @State private var error: String? = nil
     @State private var pushOn = false
     @StateObject private var prov = ProvidersModel()
@@ -53,6 +55,16 @@ struct ManageView: View {
                     Text(pushOn ? "On" : "Off").foregroundStyle(pushOn ? .green : .secondary) }
                 Button("Send a test") { Task { await store.sendTest(); UINotificationFeedbackGenerator().notificationOccurred(.success) } }
             }
+            Section {
+                HStack {
+                    TextField("6-digit code from the widget", text: $approveCode).keyboardType(.numberPad).monospacedDigit()
+                    Button(approving ? "…" : "Approve") { Task { await approveDevice() } }
+                        .buttonStyle(.borderedProminent).disabled(approving || approveCode.filter(\.isNumber).count != 6)
+                }
+                if let m = approveNote { Text(m).font(.caption).foregroundStyle(m.hasPrefix("Approved") ? .green : .red) }
+            } header: { Text("Approve a device") } footer: {
+                Text("The home-screen widget shows a code the first time. Type it here once and it works on its own after that.")
+            }
             if let devs = store.settings?.devices, !devs.isEmpty {
                 Section("Passkeys on the web") {
                     ForEach(devs) { d in
@@ -88,6 +100,19 @@ struct ManageView: View {
         .onChange(of: store.settings?.limits) { _, _ in fillCaps() }
         .alert("Could not save", isPresented: .init(get: { error != nil }, set: { _ in error = nil })) {
             Button("OK", role: .cancel) {} } message: { Text(error ?? "") }
+    }
+    private func approveDevice() async {
+        approving = true; defer { approving = false }
+        var r = URLRequest(url: URL(string: "\(Store.base)/auth/device/approve")!); r.httpMethod = "POST"
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type"); r.setValue("FirmApp/6.1", forHTTPHeaderField: "User-Agent")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["code": approveCode.filter(\.isNumber)])
+        guard let (d, resp) = try? await URLSession.shared.data(for: r) else { approveNote = "Could not reach the server"; return }
+        let j = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
+        if (resp as? HTTPURLResponse)?.statusCode == 200 {
+            approveNote = "Approved: \(j["name"] as? String ?? "device")"; approveCode = ""
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            WidgetCenter.shared.reloadAllTimelines(); await store.refresh()
+        } else { approveNote = j["error"] as? String ?? "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)" }
     }
     /// Only overwrite a box the user has not typed into.
     private func fillCaps() {

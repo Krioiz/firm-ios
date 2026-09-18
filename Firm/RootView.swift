@@ -48,7 +48,9 @@ struct RootView: View {
         }
         // Tapping the widget opens Today.
         .onOpenURL { url in
-            if url.scheme == "firm" { tab = url.host ?? "today"; Task { await store.refresh() } }
+            if url.scheme == "firm", let h = url.host, ["today", "team", "chat", "business", "manage"].contains(h) {
+                tab = h; Task { await store.refresh() }
+            }
         }
         // The badge is cleared by looking, not by guessing.
         .onChange(of: phase) { _, p in

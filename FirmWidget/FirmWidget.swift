@@ -26,25 +26,43 @@ struct FirmProvider: TimelineProvider {
             let snap = fresh ?? WidgetSnapshot.load()
             let stale = fresh == nil
             let entry = FirmEntry(date: .now, snap: snap, stale: stale)
-            completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(30 * 60))))
+            let pending = UserDefaults.standard.string(forKey: "widget.pending.code") != nil
+            completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(pending ? 10 * 60 : 30 * 60))))
         }
     }
 
+    /// The widget is its own device. Apple offers no way to share the app's Keychain without
+    /// a capability the App Store Connect API cannot grant, so the widget asks for approval
+    /// once — Marco types the code it shows into Manage → Approve a device — and from then
+    /// on proves itself exactly as the phone does.
     private func fetch() async -> WidgetSnapshot? {
-        guard let id = SharedDevice.id, let secret = SharedDevice.secret else { return nil }
-        // 1. open a session with the device identity (same handshake as the app)
-        var sr = URLRequest(url: URL(string: "\(base)/auth/device/session")!)
-        sr.httpMethod = "POST"; sr.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        sr.setValue("FirmWidget/1", forHTTPHeaderField: "User-Agent")
-        sr.httpBody = try? JSONSerialization.data(withJSONObject: ["device_id": id, "secret": secret])
-        guard let (sd, sresp) = try? await URLSession.shared.data(for: sr),
-              (sresp as? HTTPURLResponse)?.statusCode == 200,
-              let sj = try? JSONSerialization.jsonObject(with: sd) as? [String: Any],
-              let tok = sj["token"] as? String else { return nil }
+        let ud = UserDefaults.standard
+        let id: String = ud.string(forKey: "widget.device.id") ?? {
+            let v = "widget-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            ud.set(v, forKey: "widget.device.id"); return v }()
+        let secret: String = ud.string(forKey: "widget.device.secret") ?? {
+            let chars = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+            let v = String((0..<48).map { _ in chars.randomElement()! }); ud.set(v, forKey: "widget.device.secret"); return v }()
+
+        func post(_ path: String, _ body: [String: Any]) async -> (Int, [String: Any]) {
+            var r = URLRequest(url: URL(string: base + path)!); r.httpMethod = "POST"
+            r.setValue("application/json", forHTTPHeaderField: "Content-Type"); r.setValue("FirmWidget/1", forHTTPHeaderField: "User-Agent")
+            r.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            guard let (d, resp) = try? await URLSession.shared.data(for: r) else { return (0, [:]) }
+            return ((resp as? HTTPURLResponse)?.statusCode ?? 0, (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:])
+        }
+        let (code, sj) = await post("/auth/device/session", ["device_id": id, "secret": secret])
+        guard code == 200, let tok = sj["token"] as? String else {
+            // Not approved yet: ask for a code and show it. A code lives ten minutes; the
+            // timeline refreshes often enough while we wait.
+            let (_, rj) = await post("/auth/device/request", ["device_id": id, "secret": secret, "name": "The Firm Widget"])
+            if let c = rj["code"] as? String { ud.set(c, forKey: "widget.pending.code"); ud.set(Date(), forKey: "widget.pending.at") }
+            return nil
+        }
+        ud.removeObject(forKey: "widget.pending.code")
         func get(_ path: String) async -> [String: Any]? {
             var r = URLRequest(url: URL(string: base + path)!)
-            r.setValue("firm_session=\(tok)", forHTTPHeaderField: "Cookie")
-            r.setValue("FirmWidget/1", forHTTPHeaderField: "User-Agent")
+            r.setValue("firm_session=\(tok)", forHTTPHeaderField: "Cookie"); r.setValue("FirmWidget/1", forHTTPHeaderField: "User-Agent")
             r.cachePolicy = .reloadIgnoringLocalCacheData
             guard let (d, _) = try? await URLSession.shared.data(for: r) else { return nil }
             return try? JSONSerialization.jsonObject(with: d) as? [String: Any]
@@ -56,10 +74,8 @@ struct FirmProvider: TimelineProvider {
         }
         let totals = sales?["totals"] as? [String: Any]
         var snap = WidgetSnapshot(updatedAt: .now, alerts: Array(rows),
-                                  lutherEquity: luther?["equity"] as? Double,
-                                  lutherPnlPct: luther?["total_pnl_pct"] as? Double,
-                                  shopViews: totals?["views"] as? Int, shopSold: totals?["sold"] as? Int,
-                                  inboxCount: inbox?["count"] as? Int)
+                                  lutherEquity: luther?["equity"] as? Double, lutherPnlPct: luther?["total_pnl_pct"] as? Double,
+                                  shopViews: totals?["views"] as? Int, shopSold: totals?["sold"] as? Int, inboxCount: inbox?["count"] as? Int)
         if rows.isEmpty, let old = WidgetSnapshot.load() { snap.alerts = old.alerts }
         snap.save()
         return snap
@@ -74,16 +90,30 @@ struct FirmWidgetView: View {
     var body: some View {
         Group {
             switch family {
+            case _ where pendingCode != nil: approvalPrompt
             case .accessoryRectangular: lockScreen
             case .systemMedium: medium
             default: small
             }
         }
-        .widgetURL(URL(string: "firm://today"))
+        .widgetURL(URL(string: pendingCode == nil ? "firm://today" : "firm://manage"))
         .containerBackground(for: .widget) { Color(.systemBackground) }
     }
 
     private var alerts: [WidgetAlert] { entry.snap?.alerts ?? [] }
+    private var pendingCode: String? {
+        guard entry.snap == nil, let c = UserDefaults.standard.string(forKey: "widget.pending.code") else { return nil }
+        return c
+    }
+    private var approvalPrompt: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) { Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(.orange)
+                Text("Godkend widget").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary) }
+            Text((pendingCode ?? "").prefix(3) + " " + (pendingCode ?? "").suffix(3))
+                .font(.system(size: 26, weight: .bold, design: .monospaced))
+            Text("Tryk her → Manage → Approve a device").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
+        }
+    }
     private var todayCount: Int {
         let day = ISO8601DateFormatter().string(from: .now).prefix(10)
         return alerts.filter { $0.at.hasPrefix(day) }.count
