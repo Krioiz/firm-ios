@@ -17,6 +17,7 @@ enum DeviceAuth {
     }
     /// true once this device has a live session
     static func session() async -> Bool {
+        SharedDevice.set(id: deviceId, secret: secret)     // the widget opens its own session with these
         await withCheckedContinuation { c in
             post("\(base)/session", ["device_id": deviceId, "secret": secret]) { j, status in
                 c.resume(returning: status == 200 && (j?["ok"] as? Bool) == true)

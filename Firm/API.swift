@@ -1,4 +1,5 @@
 import Foundation
+import WidgetKit
 import SwiftUI
 
 // Everything the app shows, decoded from the dashboard's own JSON endpoints.
@@ -144,6 +145,13 @@ struct History: Codable { let days: [Day]? }
         if let v = await hi?.days { history = v }
         inboxCount = await ib?.count ?? 0
         loaded = true
+        // Feed the home-screen widget and wake it. It also fetches on its own every 30 min.
+        WidgetSnapshot(updatedAt: .now,
+                       alerts: alerts.prefix(8).map { WidgetAlert(at: $0.at ?? "", title: $0.title ?? "", body: $0.body ?? "") },
+                       lutherEquity: luther?.equity, lutherPnlPct: luther?.total_pnl_pct,
+                       shopViews: sales?.totals?.views, shopSold: sales?.totals?.sold,
+                       inboxCount: inboxCount).save()
+        WidgetCenter.shared.reloadAllTimelines()
         if agents.isEmpty && lastError == nil { lastError = "The server returned no agents." }
     }
     func saveCap(_ key: String, _ value: Double) async -> String? {

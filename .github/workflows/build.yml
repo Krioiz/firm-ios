@@ -19,6 +19,7 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_FORCE: "1"
           GITHUB_TOKEN: ${{ github.token }}
         run: fastlane build
       - uses: actions/upload-artifact@v4

@@ -2,14 +2,22 @@ name: Firm
 options:
   bundleIdPrefix: com.getstubbie
   deploymentTarget: { iOS: "18.0" }
+settings:
+  base:
+    DEVELOPMENT_TEAM: UW5CPP8BY5
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Development"
+    MARKETING_VERSION: "6.1"
+    CURRENT_PROJECT_VERSION: "25"
+    TARGETED_DEVICE_FAMILY: "1"
 targets:
   Firm:
     type: application
     platform: iOS
     sources: [Firm]
-    settings:
-      base:
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: FirmWidget
+        embed: true
     info:
       path: Firm/Info.plist
       properties:
@@ -21,15 +29,32 @@ targets:
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
         NSFaceIDUsageDescription: Unlock The Firm with Face ID.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.getstubbie.firm
+            CFBundleURLSchemes: [firm]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.firm
-        MARKETING_VERSION: "6.0"
-        CURRENT_PROJECT_VERSION: "24"
-        TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_STYLE: Manual
-        DEVELOPMENT_TEAM: UW5CPP8BY5
-        CODE_SIGN_IDENTITY: "Apple Development"
         PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.firm"
         CODE_SIGN_ENTITLEMENTS: Firm/Firm.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  FirmWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - FirmWidget
+      - path: Firm/Shared.swift
+    info:
+      path: FirmWidget/Info.plist
+      properties:
+        CFBundleDisplayName: The Firm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.firm.widget
+        PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.firm.widget"
+        CODE_SIGN_ENTITLEMENTS: FirmWidget/FirmWidget.entitlements
+        SKIP_INSTALL: true

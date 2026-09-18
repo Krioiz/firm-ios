@@ -46,6 +46,10 @@ struct RootView: View {
             }
             Task { await store.refresh() }
         }
+        // Tapping the widget opens Today.
+        .onOpenURL { url in
+            if url.scheme == "firm" { tab = url.host ?? "today"; Task { await store.refresh() } }
+        }
         // The badge is cleared by looking, not by guessing.
         .onChange(of: phase) { _, p in
             if p == .active { UNUserNotificationCenter.current().setBadgeCount(0) }
