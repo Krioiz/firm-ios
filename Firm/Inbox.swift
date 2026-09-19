@@ -1,9 +1,11 @@
 import SwiftUI
+import AVKit
 
 struct InboxItem: Codable, Identifiable, Hashable {
     let id: String; let agent: String?; let kind: String?; let action: String?
     let title: String?; let detail: String?; let meta: String?; let score: Double?
     let quote: String?; let link: String?; let slug: String?; let since: String?
+    let thumb: String?
 }
 struct InboxPayload: Codable { let count: Int?; let items: [InboxItem]? }
 
@@ -124,9 +126,30 @@ struct InboxView: View {
 struct InboxCard: View {
     let item: InboxItem; let busy: Bool; let agent: Agent?
     let approve: () -> Void; let reject: () -> Void; let discuss: () -> Void
-    private var verb: (String, String) { item.action == "build" ? ("Build this", "Not now") : ("Keep", "Reject") }
+    private var verb: (String, String) {
+        switch item.action {
+        case "build": return ("Build this", "Not now")
+        case "reel": return ("Publish", "Reject")
+        default: return ("Keep", "Reject")
+        }
+    }
+    @State private var playing: URL? = nil
+    private func abs(_ s: String?) -> URL? {
+        guard let s, !s.isEmpty else { return nil }
+        return s.hasPrefix("/") ? URL(string: "https://getstubbie.com" + s) : URL(string: s)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if item.kind == "reel", let cover = abs(item.thumb) {
+                // The cover is what YouTube will show; tap to watch the reel itself, in the app.
+                Button { playing = abs(item.link) } label: {
+                    AsyncImage(url: cover) { img in img.resizable().aspectRatio(9/16, contentMode: .fill) }
+                        placeholder: { Rectangle().fill(.quaternary).aspectRatio(9/16, contentMode: .fill) }
+                    .frame(height: 300).frame(maxWidth: .infinity).clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay { Image(systemName: "play.circle.fill").font(.system(size: 54)).foregroundStyle(.white.opacity(0.9)).shadow(radius: 6) }
+                }.buttonStyle(.plain)
+                .fullScreenCover(item: $playing) { url in ReelPlayer(url: url) { playing = nil } }
+            }
             HStack(spacing: 8) {
                 if let a = agent { Avatar(agent: a, size: 22) }
                 Text((item.agent ?? "").capitalized).font(.system(size: 13, weight: .semibold))
@@ -147,7 +170,7 @@ struct InboxCard: View {
                     .padding(.leading, 10)
                     .overlay(alignment: .leading) { Rectangle().fill(Color.secondary.opacity(0.3)).frame(width: 2) }
             }
-            if let l = item.link, let url = URL(string: l), !l.isEmpty {
+            if item.kind != "reel", let l = item.link, let url = URL(string: l), !l.isEmpty {
                 Link("Where this came from", destination: url).font(.system(size: 13))
             }
             HStack(spacing: 10) {
@@ -166,5 +189,28 @@ struct InboxCard: View {
             .opacity(busy ? 0.4 : 1)
         }
         .padding(.vertical, 6)
+    }
+}
+
+
+extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
+
+/// Plays a render straight from the server. The session cookie the app already holds is handed to
+/// AVPlayer explicitly — it does not share URLSession's jar on its own.
+struct ReelPlayer: View {
+    let url: URL; let done: () -> Void
+    @State private var player: AVPlayer? = nil
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            if let p = player { VideoPlayer(player: p).ignoresSafeArea() }
+            Button { done() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 30)).foregroundStyle(.white.opacity(0.85)).padding() }
+        }
+        .onAppear {
+            let cookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+            let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPCookiesKey: cookies])
+            let p = AVPlayer(playerItem: AVPlayerItem(asset: asset)); p.play(); player = p
+        }
+        .onDisappear { player?.pause() }
     }
 }
