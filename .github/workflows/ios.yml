@@ -1,0 +1,75 @@
+name: Build The Firm
+
+# GitHub gives free macOS runners with Xcode pre-installed. That is the whole trick: the VPS is
+# Linux and can never compile an iOS app, but this runner can, and it costs nothing on a public
+# repo (and 10x minutes on a private one, so keep an eye on the quota).
+#
+# Two ways to run it, picked when you start it by hand:
+#   testflight  — signs for the App Store and uploads to TestFlight. Install from the TestFlight
+#                 app on any device signed into your Apple ID. No device registration, no
+#                 7-day expiry. This is the one you want.
+#   device      — signs for development and leaves a downloadable .ipa artifact. Only installs
+#                 on devices already in the provisioning profile.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: What to build
+        type: choice
+        default: testflight
+        options: [testflight, device]
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Install the generator and fastlane
+        run: |
+          brew install xcodegen
+          gem install fastlane --no-document
+
+      # TestFlight refuses a build number it has seen before, so the run number becomes the
+      # build. 6.2 (1), 6.2 (2), and so on — never a collision, never a manual bump.
+      - name: Stamp the build number
+        run: |
+          /usr/bin/sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"${GITHUB_RUN_NUMBER}\"/" project.yml
+          grep CURRENT_PROJECT_VERSION project.yml
+
+      - name: Build
+        env:
+          ASC_KEY_ID:      ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID:   ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8:      ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID:   ${{ secrets.APPLE_TEAM_ID }}
+          MATCH_PASSWORD:  ${{ secrets.MATCH_PASSWORD }}
+          GITHUB_TOKEN:    ${{ secrets.MATCH_GIT_TOKEN }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+        run: fastlane ${{ inputs.lane }}
+
+      # Only the development lane produces something to download here; the TestFlight lane
+      # hands the build to Apple instead.
+      - name: Keep the .ipa
+        if: inputs.lane == 'device'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Firm-ipa-${{ github.run_number }}
+          path: ios-app/out/*.ipa
+          if-no-files-found: error
+
+      - name: Logs, if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            ~/Library/Logs/gym
+            ~/Library/Logs/fastlane
+          if-no-files-found: ignore
