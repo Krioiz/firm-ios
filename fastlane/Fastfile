@@ -21,6 +21,16 @@ def prepare(type)
         git_url: "https://github.com/Krioiz/firm-ios.git", git_branch: "certs",
         git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['GITHUB_TOKEN']}"),
         force_for_new_devices: true, force: ENV["MATCH_FORCE"] == "1")
+  # project.yml names the Development profile on both targets. match makes AppStore profiles for
+  # the appstore type, so Xcode goes looking for a profile that does not exist and the archive
+  # fails with "No profile for team ... matching 'match Development ...'". Rewrite the specifier
+  # per target rather than forcing one profile onto both through xcargs — the app and the widget
+  # have different bundle ids and therefore different profiles.
+  if type == "appstore"
+    spec = File.read("../project.yml")
+    File.write("../project.yml", spec.gsub("match Development ", "match AppStore "))
+    UI.message("project.yml switched to the AppStore profiles")
+  end
   sh "cd .. && xcodegen generate"
   api
 end
