@@ -56,6 +56,23 @@ platform :ios do
               export_options: { method: "app-store",
                                 provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
               xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Distribution' CODE_SIGN_STYLE=Manual")
+    # TestFlight needs an app record to upload into, and there was none: the build succeeded and
+    # then stopped at "Couldn't find app 'com.getstubbie.firm' on App Store Connect". produce
+    # creates it with the same API key. It makes a DRAFT record only — nothing is submitted for
+    # review and nothing becomes public.
+    #
+    # The name here is the App Store Connect listing name, which must be unique across the whole
+    # store. It is not what shows on the home screen: that is CFBundleDisplayName, "The Firm".
+    begin
+      produce(app_identifier: "com.getstubbie.firm",
+              app_name: ENV["ASC_APP_NAME"] || "The Firm by Stubbie",
+              language: "English", sku: "com.getstubbie.firm",
+              team_id: ENV["APPLE_TEAM_ID"], api_key: api,
+              skip_itc: false, skip_devcenter: true)
+    rescue => e
+      # Already there is the happy case on every run after the first.
+      UI.important("produce: #{e.message}")
+    end
     upload_to_testflight(api_key: api,
                          skip_waiting_for_build_processing: true,
                          # Nothing to review for internal testers, so no compliance questionnaire.
