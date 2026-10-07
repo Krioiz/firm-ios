@@ -20,6 +20,9 @@ on:
         default: testflight
         options: [testflight, device]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -49,7 +52,8 @@ jobs:
           ASC_KEY_P8:      ${{ secrets.ASC_KEY_P8 }}
           APPLE_TEAM_ID:   ${{ secrets.APPLE_TEAM_ID }}
           MATCH_PASSWORD:  ${{ secrets.MATCH_PASSWORD }}
-          GITHUB_TOKEN:    ${{ secrets.MATCH_GIT_TOKEN }}
+          MATCH_FORCE:     "1"
+          GITHUB_TOKEN:    ${{ github.token }}
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
         run: fastlane ${{ inputs.lane }}
