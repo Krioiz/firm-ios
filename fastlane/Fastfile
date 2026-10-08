@@ -37,10 +37,22 @@ def prepare(type, ids = nil)
   api
 end
 
+# A scheme that is not shared is not an error to fastlane — it picks whichever scheme it can find
+# and archives that instead. That is how a Max Sizer build spent four minutes archiving The Firm
+# and then failed on a profile it never asked for. Refuse up front and name the schemes we got.
+def require_scheme(name)
+  dir = "../Firm.xcodeproj/xcshareddata/xcschemes"
+  have = Dir.exist?(dir) ? Dir.children(dir).grep(/\.xcscheme\z/).map { |f| File.basename(f, ".xcscheme") } : []
+  return if have.include?(name)
+  UI.user_error!("scheme '#{name}' is not shared, so fastlane would silently build something " \
+                 "else. project.yml must declare it under `schemes:`. Shared now: #{have.sort.join(', ')}")
+end
+
 platform :ios do
   desc "Signed development build, installable over the air on registered devices"
   lane :device do
     prepare("development")
+    require_scheme("Firm")
     build_app(project: "Firm.xcodeproj", scheme: "Firm", configuration: "Release",
               export_method: "development", output_directory: "out", output_name: "Firm.ipa",
               export_options: { method: "development",
@@ -53,6 +65,7 @@ platform :ios do
   desc "App Store signed build, uploaded to TestFlight"
   lane :testflight do
     api = prepare("appstore")
+    require_scheme("Firm")
     build_app(project: "Firm.xcodeproj", scheme: "Firm", configuration: "Release",
               export_method: "app-store", output_directory: "out", output_name: "Firm.ipa",
               export_options: { method: "app-store",
@@ -103,6 +116,7 @@ platform :ios do
   desc "Max Sizer — development build, installable on registered devices"
   lane :sizer_device do
     prepare("development", SIZER_IDS)
+    require_scheme("Sizer")
     build_app(project: "Firm.xcodeproj", scheme: "Sizer", configuration: "Release",
               export_method: "development", output_directory: "out", output_name: "MaxSizer.ipa",
               export_options: { method: "development",
@@ -113,6 +127,7 @@ platform :ios do
   desc "Max Sizer — App Store signed, uploaded to TestFlight"
   lane :sizer_testflight do
     api = prepare("appstore", SIZER_IDS)
+    require_scheme("Sizer")
     build_app(project: "Firm.xcodeproj", scheme: "Sizer", configuration: "Release",
               export_method: "app-store", output_directory: "out", output_name: "MaxSizer.ipa",
               export_options: { method: "app-store",

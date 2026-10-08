@@ -10,6 +10,21 @@ settings:
     MARKETING_VERSION: "6.2"
     CURRENT_PROJECT_VERSION: "26"
     TARGETED_DEVICE_FAMILY: "1"
+# Declared explicitly, one scheme per app, because the implicit ones cost a build. Only `Firm`
+# existed as a shared scheme, so `build_app(scheme: "Sizer")` did not fail — fastlane fell back
+# to the single scheme it could find and archived The Firm instead, which then failed on a
+# profile the Sizer lane had rightly not fetched. Naming the targets here also keeps the Sizer
+# archive from dragging in Firm and the widget, which need different profiles.
+schemes:
+  Firm:
+    build:
+      targets: { Firm: all }
+    archive: { config: Release }
+  Sizer:
+    build:
+      targets: { Sizer: all }
+    archive: { config: Release }
+
 targets:
   Firm:
     type: application
