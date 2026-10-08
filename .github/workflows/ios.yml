@@ -5,11 +5,10 @@ name: Build The Firm
 # repo (and 10x minutes on a private one, so keep an eye on the quota).
 #
 # Two ways to run it, picked when you start it by hand:
-#   testflight  — signs for the App Store and uploads to TestFlight. Install from the TestFlight
-#                 app on any device signed into your Apple ID. No device registration, no
-#                 7-day expiry. This is the one you want.
-#   device      — signs for development and leaves a downloadable .ipa artifact. Only installs
-#                 on devices already in the provisioning profile.
+#   testflight        The Firm, App Store signed, uploaded to TestFlight
+#   device            The Firm, development signed, downloadable .ipa
+#   sizer_testflight  Max Sizer, App Store signed, uploaded to TestFlight
+#   sizer_device      Max Sizer, development signed, downloadable .ipa
 
 on:
   workflow_dispatch:
@@ -18,7 +17,7 @@ on:
         description: What to build
         type: choice
         default: testflight
-        options: [testflight, device]
+        options: [testflight, device, sizer_device, sizer_testflight]
 
 permissions:
   contents: write
@@ -67,11 +66,11 @@ jobs:
       # Only the development lane produces something to download here; the TestFlight lane
       # hands the build to Apple instead.
       - name: Keep the .ipa
-        if: inputs.lane == 'device'
+        if: endsWith(inputs.lane, 'device')
         uses: actions/upload-artifact@v4
         with:
-          name: Firm-ipa-${{ github.run_number }}
-          path: ios-app/out/*.ipa
+          name: ipa-${{ inputs.lane }}-${{ github.run_number }}
+          path: out/*.ipa
           if-no-files-found: error
 
       - name: Logs, if it failed

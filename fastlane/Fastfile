@@ -2,19 +2,21 @@ default_platform(:ios)
 
 # Shared setup: an App Store Connect API key, the two bundle ids registered, and xcodegen run.
 # Both lanes need all of it, and getting it wrong once cost an afternoon of signing errors.
-def prepare(type)
+def prepare(type, ids = nil)
   setup_ci
   api = app_store_connect_api_key(key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"],
                                   key_content: ENV["ASC_KEY_P8"], is_key_content_base64: false)
-  ids = ["com.getstubbie.firm", "com.getstubbie.firm.widget"]
+  ids ||= ["com.getstubbie.firm", "com.getstubbie.firm.widget"]
   # The widget is a second bundle id; Apple must know about it before match asks for a profile.
   Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
     key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key: ENV["ASC_KEY_P8"])
   existing = Spaceship::ConnectAPI::BundleId.all.map(&:identifier)
   ids.each do |bid|
     next if existing.include?(bid)
-    Spaceship::ConnectAPI::BundleId.create(
-      name: (bid.end_with?("widget") ? "The Firm Widget" : "The Firm"), identifier: bid, platform: "IOS")
+    nice = if bid.end_with?("widget") then "The Firm Widget"
+           elsif bid.end_with?("sizer") then "Max Sizer"
+           else "The Firm" end
+    Spaceship::ConnectAPI::BundleId.create(name: nice, identifier: bid, platform: "IOS")
     UI.message("created bundle id #{bid}")
   end
   match(type: type, app_identifier: ids, api_key: api, readonly: false,
@@ -91,5 +93,32 @@ platform :ios do
   desc "Old name for :device, kept so an existing bookmark still works"
   lane :build do
     device
+  end
+
+  # ---- Max Sizer -------------------------------------------------------------------------
+  # A separate app with its own bundle id, built from the same project. Nothing it does depends
+  # on the dashboard, so it ships on its own schedule.
+  SIZER_IDS = ["com.getstubbie.sizer"]
+
+  desc "Max Sizer — development build, installable on registered devices"
+  lane :sizer_device do
+    prepare("development", SIZER_IDS)
+    build_app(project: "Firm.xcodeproj", scheme: "Sizer", configuration: "Release",
+              export_method: "development", output_directory: "out", output_name: "MaxSizer.ipa",
+              export_options: { method: "development",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Development' CODE_SIGN_STYLE=Manual")
+  end
+
+  desc "Max Sizer — App Store signed, uploaded to TestFlight"
+  lane :sizer_testflight do
+    api = prepare("appstore", SIZER_IDS)
+    build_app(project: "Firm.xcodeproj", scheme: "Sizer", configuration: "Release",
+              export_method: "app-store", output_directory: "out", output_name: "MaxSizer.ipa",
+              export_options: { method: "app-store",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Distribution' CODE_SIGN_STYLE=Manual")
+    upload_to_testflight(api_key: api, app_identifier: "com.getstubbie.sizer",
+                         skip_waiting_for_build_processing: true, skip_submission: true)
   end
 end

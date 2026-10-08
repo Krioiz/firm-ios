@@ -38,6 +38,29 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.firm"
         CODE_SIGN_ENTITLEMENTS: Firm/Firm.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  # Max Sizer — its own app, its own bundle id, its own place on the home screen. Native rather
+  # than a web view: the arithmetic is trivial, it must work with no signal, and a WKWebView
+  # shell would need the dashboard passkey and would likely be rejected on review besides.
+  Sizer:
+    type: application
+    platform: iOS
+    sources: [Sizer]
+    info:
+      path: Sizer/Info.plist
+      properties:
+        CFBundleDisplayName: Max Sizer
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.sizer
+        PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.sizer"
+        CODE_SIGN_ENTITLEMENTS: Sizer/Sizer.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
   FirmWidget:
     type: app-extension
     platform: iOS
