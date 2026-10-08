@@ -73,6 +73,20 @@ jobs:
           path: out/*.ipa
           if-no-files-found: error
 
+      # An artifact expires and needs a signed-in browser; the phone wants a plain file. The VPS
+      # mirrors releases onto getstubbie.com, so publish one — and tag it with the app, because
+      # the mirror picks a release per app and must never serve Max Sizer as The Firm.
+      - name: Publish release
+        if: endsWith(inputs.lane, 'device')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ inputs.lane }}" in
+            sizer_device) TAG=sizer-${GITHUB_RUN_NUMBER}; TITLE="Max Sizer build ${GITHUB_RUN_NUMBER}" ;;
+            *)            TAG=firm-${GITHUB_RUN_NUMBER};  TITLE="The Firm build ${GITHUB_RUN_NUMBER}" ;;
+          esac
+          gh release create "$TAG" out/*.ipa --title "$TITLE" --notes "Development signed. Sideload it." --repo "$GITHUB_REPOSITORY"
+
       - name: Logs, if it failed
         if: failure()
         uses: actions/upload-artifact@v4
