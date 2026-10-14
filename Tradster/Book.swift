@@ -503,7 +503,7 @@ struct BookChatView: View {
     }
     /// Only when the numbers are not fresh (from disk, or no signal): when they are from.
     private var staleTime: String? {
-        guard let a = model.today?.at, let d = ISO8601DateFormatter.withFraction.date(from: a) ?? ISO8601DateFormatter().date(from: a),
+        guard let a = model.today?.at, let d = Tradster.date(a),
               Date().timeIntervalSince(d) > 15 * 60 else { return nil }
         return Tradster.when(a)
     }
@@ -963,7 +963,7 @@ struct HistoryView: View {
         let cal = Calendar.current
         var today: [ConvRow] = [], week: [ConvRow] = [], older: [ConvRow] = []
         for c in rows {
-            let d = ISO8601DateFormatter.withFraction.date(from: c.updated ?? "") ?? ISO8601DateFormatter().date(from: c.updated ?? "") ?? .distantPast
+            let d = Tradster.date(c.updated) ?? .distantPast
             if cal.isDateInToday(d) { today.append(c) }
             else if d > Date().addingTimeInterval(-7 * 86400) { week.append(c) }
             else { older.append(c) }
@@ -1368,7 +1368,7 @@ struct LegDetail: View {
     private var bpVal: Double { c.isMarket ? (c.change_pct ?? 0) * 100 : Double(c.bp ?? 0) }
     private var tint: Color { bpVal >= 0 ? Theme.up : Theme.down }
     private func px(_ v: Double) -> String { v >= 100 ? String(format: "%.2f", v) : v >= 1 ? String(format: "%.4f", v) : String(format: "%.6g", v) }
-    private func date(_ s: String?) -> Date? { guard let s else { return nil }; return ISO8601DateFormatter().date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s) }
+    private func date(_ s: String?) -> Date? { Tradster.date(s) }
     private func until(_ s: String?) -> String {
         guard let d = date(s) else { return "–" }
         let m = Int(d.timeIntervalSinceNow / 60); if m <= 0 { return "nu" }
@@ -1619,7 +1619,7 @@ struct CoinCard: View {
                     }
                     RuleMark(y: .value("ind", e)).foregroundStyle(Theme.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
                         .annotation(position: .top, alignment: .leading) { Text("ind \(px(e))").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
-                    if let o = c.opened_at, let d = ISO8601DateFormatter().date(from: o) ?? ISO8601DateFormatter.withFraction.date(from: o) {
+                    if let d = Tradster.date(c.opened_at) {
                         RuleMark(x: .value("åbnet", d)).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
                     }
                 }
@@ -1671,19 +1671,29 @@ enum Theme {
 enum Tradster {
     static let base = "https://getstubbie.com/dashboard"
     /// 10.234 — Danish thousands, no decimals.
+    // Formatters are made once. Building a NumberFormatter or DateFormatter costs about as much as
+    // laying out a card, and every card asked for two or three of them on every render.
+    private static let krFormat: NumberFormatter = {
+        let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal; f.maximumFractionDigits = 0; return f
+    }()
+    private static let clock: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "da_DK"); f.dateFormat = "HH:mm"; return f }()
+    private static let dayClock: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "da_DK"); f.dateFormat = "d. MMM HH:mm"; return f }()
     static func kr(_ v: Double) -> String {
-        let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal; f.maximumFractionDigits = 0
-        return f.string(from: NSNumber(value: v.rounded())) ?? String(Int(v.rounded()))
+        krFormat.string(from: NSNumber(value: v.rounded())) ?? String(Int(v.rounded()))
+    }
+    /// The server's timestamps, with or without fractional seconds.
+    static func date(_ s: String?) -> Date? {
+        guard let s, !s.isEmpty else { return nil }
+        return ISO8601DateFormatter.plain.date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s)
     }
     static func when(_ s: String?) -> String {
-        guard let s, let d = ISO8601DateFormatter().date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s) else { return "" }
-        let f = DateFormatter(); f.locale = Locale(identifier: "da_DK")
-        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "d. MMM HH:mm"
-        return f.string(from: d)
+        guard let d = date(s) else { return "" }
+        return (Calendar.current.isDateInToday(d) ? clock : dayClock).string(from: d)
     }
 }
 
 extension ISO8601DateFormatter {
+    static let plain = ISO8601DateFormatter()
     static let withFraction: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
