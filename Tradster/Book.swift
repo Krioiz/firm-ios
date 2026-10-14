@@ -10,8 +10,8 @@ import PhotosUI
 // server, so the history drawer on the left shows them on every phone. The plus sends a photo.
 // A number on a card never comes from a model: the server picks cards from the facts.
 
-struct BookPt: Codable, Hashable { let t: Double; let c: Double }
-struct BookCard: Codable, Identifiable, Hashable {
+struct BookPt: Codable, Hashable, Sendable { let t: Double; let c: Double }
+struct BookCard: Codable, Identifiable, Hashable, Sendable {
     var id: String { "\(book ?? "")/\(symbol ?? "")/\(status ?? "")/\(opened_at ?? "")" }
     let symbol: String?; let name: String?; let logo: String?; let logo_fallback: String?
     let book: String?; let side: String?; let status: String?
@@ -21,7 +21,7 @@ struct BookCard: Codable, Identifiable, Hashable {
     let kind: String?; let last: Double?; let change_pct: Double?; let prev_close: Double?; let currency: String?; let day_start: Double?; let status_text: String?
     var isMarket: Bool { kind == "market" }
 }
-struct BookToday: Codable {
+struct BookToday: Codable, Sendable {
     let at: String?; let headline: String?; let cards: [BookCard]?
     var equity: [String: BookEquity?]? = nil
     /// Both paper books together: what they are worth now, and against what they started with.
@@ -31,25 +31,25 @@ struct BookToday: Codable {
         return (rows.reduce(0) { $0 + ($1.dkk ?? 0) }, rows.reduce(0) { $0 + ($1.start ?? 0) })
     }
 }
-struct BookEquity: Codable, Hashable { let dkk: Double?; let start: Double? }
-struct AgentRow: Codable, Identifiable, Hashable { let id: String; let name: String?; let role: String? }
-struct AgentsPayload: Codable { let agents: [AgentRow]? }
-struct ServerMsg: Codable, Identifiable, Hashable {
+struct BookEquity: Codable, Hashable, Sendable { let dkk: Double?; let start: Double? }
+struct AgentRow: Codable, Identifiable, Hashable, Sendable { let id: String; let name: String?; let role: String? }
+struct AgentsPayload: Codable, Sendable { let agents: [AgentRow]? }
+struct ServerMsg: Codable, Identifiable, Hashable, Sendable {
     var id: String { "\(at ?? "")/\(role ?? "")/\(from ?? "")/\((text ?? "").prefix(20))" }
     let role: String?; let text: String?; let at: String?; let from: String?; let agent: String?
     let cards: [BookCard]?; let image: String?
     var sources: [SourceRow]? = nil
 }
-struct SourceRow: Codable, Hashable { let kind: String?; let name: String?; let symbol: String?; let logo: String?; var url: String? = nil }
-struct StreamEvent: Codable { let type: String; let id: String?; let title: String?; let text: String?; let source: SourceRow?; let reply: ServerMsg?; let error: String? }
+struct SourceRow: Codable, Hashable, Sendable { let kind: String?; let name: String?; let symbol: String?; let logo: String?; var url: String? = nil }
+struct StreamEvent: Codable, Sendable { let type: String; let id: String?; let title: String?; let text: String?; let source: SourceRow?; let reply: ServerMsg?; let error: String? }
 struct StatusLine: Identifiable, Hashable { let id = UUID(); let text: String; let source: SourceRow? }
 enum AskKoda { static let note = Notification.Name("tradster.ask") }
-struct ConvRow: Codable, Identifiable, Hashable {
+struct ConvRow: Codable, Identifiable, Hashable, Sendable {
     let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?; let brief: Bool?
 }
-struct ConvList: Codable { let conversations: [ConvRow]? }
-struct ConvDoc: Codable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
-struct SendResult: Codable { let id: String?; let title: String?; let agents: [String]?; let replies: [ServerMsg]?; let error: String? }
+struct ConvList: Codable, Sendable { let conversations: [ConvRow]? }
+struct ConvDoc: Codable, Sendable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
+struct SendResult: Codable, Sendable { let id: String?; let title: String?; let agents: [String]?; let replies: [ServerMsg]?; let error: String? }
 
 /// What the phone keeps between launches, so the app opens on what you saw last instead of a
 /// spinner: the conversation list, the book's today, and every conversation you have opened.
@@ -59,16 +59,25 @@ enum Disk {
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }()
-    static func save<T: Encodable>(_ v: T, _ name: String) {
-        if let d = try? JSONEncoder().encode(v) { try? d.write(to: dir.appendingPathComponent(name), options: .atomic) }
+    /// Writes happen on one serial queue, off the main thread: a conversation with its cards and
+    /// price series is easily a few hundred kB of JSON, and encoding it on main dropped frames
+    /// right as an answer landed. Serial, so a save and the prune after it keep their order.
+    static let queue = DispatchQueue(label: "tradster.disk", qos: .utility)
+    static func save<T: Encodable & Sendable>(_ v: T, _ name: String) {
+        queue.async { if let d = try? JSONEncoder().encode(v) { try? d.write(to: dir.appendingPathComponent(name), options: .atomic) } }
+    }
+    /// Read and decode off the main thread.
+    static func loadAsync<T: Decodable & Sendable>(_ t: T.Type, _ name: String) async -> T? {
+        await Task.detached(priority: .userInitiated) { load(t, name) }.value
     }
     static func load<T: Decodable>(_ t: T.Type, _ name: String) -> T? {
         guard let d = try? Data(contentsOf: dir.appendingPathComponent(name)) else { return nil }
         return try? JSONDecoder().decode(T.self, from: d)
     }
-    static func remove(_ name: String) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(name)) }
+    static func remove(_ name: String) { queue.async { try? FileManager.default.removeItem(at: dir.appendingPathComponent(name)) } }
     /// Keep the newest `keep` conversations; the rest are on the server anyway.
-    static func prune(keep: Int = 40) {
+    static func prune(keep: Int = 40) { queue.async { pruneNow(keep: keep) } }
+    private static func pruneNow(keep: Int) {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         let convs = files.filter { $0.lastPathComponent.hasPrefix("conv-") }
@@ -77,7 +86,7 @@ enum Disk {
         for u in convs.sorted(by: { date($0) > date($1) }).dropFirst(keep) { try? fm.removeItem(at: u) }
     }
 }
-struct LastOpen: Codable { let id: String; let at: Date }
+struct LastOpen: Codable, Sendable { let id: String; let at: Date }
 
 @MainActor final class BookChatModel: ObservableObject {
     @Published var messages: [ServerMsg] = []
@@ -119,15 +128,20 @@ struct LastOpen: Codable { let id: String; let at: Date }
         }
         return r
     }
-    private func fetch<T: Decodable>(_ path: String, _ type: T.Type) async -> T? {
+    private func fetch<T: Decodable & Sendable>(_ path: String, _ type: T.Type) async -> T? {
         do {
             let (d, _) = try await URLSession.shared.data(for: request(path))
             offline = false
-            return try? JSONDecoder().decode(T.self, from: d)
+            return await Self.decode(T.self, d)
         } catch {
             if Self.isOffline(error) { offline = true }
             return nil
         }
+    }
+    /// JSON is decoded off the main thread: a conversation with cards and series is big enough to
+    /// cost a frame or two, and it always arrived at the moment the screen was changing.
+    nonisolated static func decode<T: Decodable & Sendable>(_ t: T.Type, _ d: Data) async -> T? {
+        await Task.detached(priority: .userInitiated) { try? JSONDecoder().decode(T.self, from: d) }.value
     }
     static func isOffline(_ e: Error) -> Bool {
         guard let u = e as? URLError else { return false }
@@ -184,7 +198,7 @@ struct LastOpen: Codable { let id: String; let at: Date }
         if id == conversationId, sending { return }          // already here, the answer is on its way
         leave()
         let g = gen
-        if let cached = Disk.load(ConvDoc.self, "conv-\(id).json") { show(cached) }   // at once, from disk
+        if let cached = await Disk.loadAsync(ConvDoc.self, "conv-\(id).json"), g == gen { show(cached) }   // at once, from disk
         guard let doc = await fetch("conversations/\(id)", ConvDoc.self), g == gen else { return }
         show(doc); persist()
         if doc.pending == true { watch(g) }
@@ -248,7 +262,8 @@ struct LastOpen: Codable { let id: String; let at: Date }
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
             guard g == gen else { return }
             offline = false
-            let p = try? JSONDecoder().decode(SendResult.self, from: d)
+            let p = await Self.decode(SendResult.self, d)
+            guard g == gen else { return }
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
                 error = p?.error ?? "Serveren svarede ikke (\(h.statusCode))"; retry = asked; Haptic.fail()
             } else if let p {
