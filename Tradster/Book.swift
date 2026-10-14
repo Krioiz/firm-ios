@@ -168,21 +168,23 @@ struct BookChatView: View {
             }
             .offset(x: pageOffset)
             .ignoresSafeArea(edges: openAmount > 0 ? .vertical : [])
-            .gesture(DragGesture(minimumDistance: 12)
+            // The card follows the finger. From the left edge when closed, from anywhere when open;
+            // high priority so the scroll views and the text field inside do not swallow it.
+            .highPriorityGesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
                 .onChanged { g in
-                    if !showHistory { if g.startLocation.x < 44 { drag = max(0, g.translation.width) } }
-                    else { drag = min(0, g.translation.width) }
+                    let dx = g.translation.width, dy = g.translation.height
+                    guard abs(dx) > abs(dy) else { return }                       // a vertical swipe is a scroll
+                    if !showHistory { if g.startLocation.x < 60 { drag = max(0, dx) } }
+                    else { drag = min(0, dx) }
                 }
                 .onEnded { g in
                     let predicted = g.predictedEndTranslation.width
-                    withAnimation(.spring(duration: 0.3)) {
-                        if !showHistory { showHistory = g.startLocation.x < 44 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.6) }
-                        else { showHistory = !(drag < -drawerWidth * 0.25 || predicted < -drawerWidth * 0.6) }
-                        drag = 0
-                    }
+                    let open: Bool
+                    if !showHistory { open = g.startLocation.x < 60 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.5) }
+                    else { open = !(drag < -drawerWidth * 0.2 || predicted < -drawerWidth * 0.5) }
+                    withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
                 })
         }
-        .animation(.spring(duration: 0.3), value: showHistory)
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
@@ -207,7 +209,7 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
-    private func setDrawer(_ open: Bool) { withAnimation(.spring(duration: 0.3)) { showHistory = open; drag = 0 } }
+    private func setDrawer(_ open: Bool) { withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
 
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
