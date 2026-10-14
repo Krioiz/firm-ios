@@ -1,3 +1,4 @@
+import UIKit
 import Foundation
 import Speech
 import AVFoundation
@@ -59,6 +60,7 @@ import AVFoundation
         engine.prepare()
         do { try engine.start() } catch { denied = true; return }
         listening = true; startedAt = Date()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             Task { @MainActor in
                 guard let self else { return }
@@ -71,6 +73,7 @@ import AVFoundation
     /// Returns what was heard.
     @discardableResult
     func stop() -> String {
+        if listening { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
         request?.endAudio()
         teardown()
         return text.trimmingCharacters(in: .whitespacesAndNewlines)

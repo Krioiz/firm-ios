@@ -99,6 +99,7 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty || image != nil, !sending else { return }
         sending = true
+        Haptic.tap()
         var payload: [String: Any] = ["message": body, "agents": Array(selected)]
         var localImage: String? = nil
         if let image, let jpeg = image.tradsterJPEG() {
@@ -111,10 +112,11 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
             let p = try? JSONDecoder().decode(SendResult.self, from: d)
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
-                error = p?.error ?? "HTTP \(h.statusCode)"
+                error = p?.error ?? "HTTP \(h.statusCode)"; Haptic.fail()
             } else if let p {
                 if let id = p.id { conversationId = id }
                 messages.append(contentsOf: p.replies ?? [])
+                Haptic.done()
                 await refreshList()
             } else {
                 error = "Intet svar"
@@ -183,6 +185,7 @@ struct BookChatView: View {
                     let open: Bool
                     if !showHistory { open = g.startLocation.x < 60 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.5) }
                     else { open = !(drag < -drawerWidth * 0.2 || predicted < -drawerWidth * 0.5) }
+                    if open != showHistory { Haptic.soft() }
                     withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
                 })
         }
@@ -210,7 +213,7 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
-    private func setDrawer(_ open: Bool) { if open { focused = false }; withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
+    private func setDrawer(_ open: Bool) { Haptic.soft(); if open { focused = false }; withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
 
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -541,7 +544,7 @@ struct HistoryView: View {
                             Text(title).font(.system(size: 15)).foregroundStyle(Theme.secondary)
                                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 6)
                             ForEach(list) { c in
-                                Button { Task { await model.open(c.id); onClose() } } label: {
+                                Button { Haptic.pick(); Task { await model.open(c.id); onClose() } } label: {
                                     HStack(spacing: 16) {
                                         Image(systemName: c.brief == true ? "sunrise" : ((c.agents ?? []).isEmpty ? "bubble.left" : "person.2"))
                                             .font(.system(size: 17)).foregroundStyle(Theme.secondary).frame(width: 24)
@@ -632,7 +635,7 @@ struct AgentsSheet: View {
             .overlay(Text(String(name.prefix(1)).uppercased()).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text))
     }
     private func row(selected: Bool, title: String, subtitle: String, icon: AnyView, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Haptic.pick(); action() }) {
             HStack(spacing: 12) {
                 icon.frame(width: 36, height: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -723,7 +726,7 @@ struct CardStrip: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(cards) { c in
-                            Button { open = c } label: { Tile(c: c) }.buttonStyle(.plain)
+                            Button { Haptic.tap(); open = c } label: { Tile(c: c) }.buttonStyle(.plain)
                         }
                     }.padding(.horizontal, 20)
                 }
@@ -913,6 +916,16 @@ struct CoinCard: View {
             return "\(book) · åbnet \(Tradster.when(c.opened_at)) · ud \(Tradster.when(c.closes_at))"
         }
     }
+}
+
+// ---- haptics: small, and only where something actually happened ------------------------
+enum Haptic {
+    static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    static func soft() { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.8) }
+    static func pick() { UISelectionFeedbackGenerator().selectionChanged() }
+    static func done() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    static func fail() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
+    static func rigid() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
 }
 
 // ---- theme: always dark, warm, one accent ---------------------------------------------
