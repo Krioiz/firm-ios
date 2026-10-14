@@ -376,7 +376,6 @@ struct BookChatView: View {
     @State private var draft = ""
     @State private var pick: PhotosPickerItem? = nil
     @State private var photo: UIImage? = nil
-    @State private var showHistory = false
     @State private var showBook = false
     @State private var showAgents = false
     @State private var showSettings = false
@@ -387,40 +386,23 @@ struct BookChatView: View {
     @FocusState private var focused: Bool
     @State private var awayFromBottom = false              // scrolled up in a long thread
 
-    private let drawerWidth: CGFloat = UIScreen.main.bounds.width - 72
-    @State private var drag: CGFloat = 0                     // live, while the finger is down
-    private var pageOffset: CGFloat { min(drawerWidth, max(0, (showHistory ? drawerWidth : 0) + drag)) }
-    private var openAmount: CGFloat { drawerWidth > 0 ? pageOffset / drawerWidth : 0 }
+    // Held in @State, not @StateObject: this view must not re-render when the drawer moves. Only
+    // the two small modifiers below watch it.
+    @State private var drawer = DrawerState()
 
     var body: some View {
         ZStack(alignment: .leading) {
             // The drawer is the floor; the page is a card lying on it that slides aside.
             Theme.bg.ignoresSafeArea()
             HistoryView(model: model, onClose: { setDrawer(false) }, onBook: { setDrawer(false); showBook = true }, onAgents: { setDrawer(false); showAgents = true }, onSettings: { setDrawer(false); showSettings = true })
-                .frame(width: drawerWidth)
-                .opacity(Double(0.35 + 0.65 * openAmount))
+                .frame(width: drawer.width)
+                .modifier(DrawerFloor(d: drawer))
             VStack(spacing: 0) {
                 topBar
                 if model.messages.isEmpty { emptyState } else { thread }
                 composer
             }
-            // The card's shape lives in its background, which runs to the screen's edges; the
-            // content stays inside the safe area, so nothing jumps when the drawer starts to open.
-            .background {
-                RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous).fill(Theme.bg)
-                    .shadow(color: .black.opacity(0.5 * openAmount), radius: 24, x: -8, y: 0)
-                    .ignoresSafeArea()
-            }
-            .overlay {
-                if pageOffset > 0 {
-                    RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous).fill(Color.black.opacity(0.25 * openAmount))
-                        .ignoresSafeArea()
-                        .onTapGesture { setDrawer(false) }
-                        .accessibilityLabel("Luk menuen")
-                        .accessibilityAddTraits(.isButton)
-                }
-            }
-            .offset(x: pageOffset)
+            .modifier(DrawerPage(d: drawer, close: { setDrawer(false) }))
         }
         // The card follows the finger: from the left edge when closed; from anywhere, the drawer
         // included, when open. Simultaneous, and only when clearly sideways, so scrolling still scrolls.
@@ -429,16 +411,17 @@ struct BookChatView: View {
                     let dx = g.translation.width, dy = g.translation.height
                     guard abs(dx) > abs(dy) * 1.5 else { return }                 // a vertical swipe is a scroll
                     if focused { focused = false }
-                    if !showHistory { if g.startLocation.x < 60 { drag = max(0, dx) } }
-                    else { drag = min(0, dx) }
+                    if !drawer.open { if g.startLocation.x < 60 { drawer.drag = max(0, dx) } }
+                    else { drawer.drag = min(0, dx) }
                 }
                 .onEnded { g in
-                    let predicted = g.predictedEndTranslation.width
+                    let predicted = g.predictedEndTranslation.width, w = drawer.width, drag = drawer.drag
                     let open: Bool
-                    if !showHistory { open = g.startLocation.x < 60 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.5) }
-                    else { open = !(drag < -drawerWidth * 0.2 || predicted < -drawerWidth * 0.5) }
-                    if open != showHistory { Haptic.soft(); if open { Task { await model.refreshList() } } }
-                    withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
+                    if !drawer.open { open = g.startLocation.x < 60 && (drag > w * 0.3 || predicted > w * 0.5) }
+                    else { open = !(drag < -w * 0.2 || predicted < -w * 0.5) }
+                    if open != drawer.open { Haptic.soft(); if open { Task { await model.refreshList() } } }
+                    if open == drawer.open && drag == 0 { return }
+                    withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { drawer.open = open; drawer.drag = 0 }
                 })
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
@@ -469,7 +452,7 @@ struct BookChatView: View {
     private func setDrawer(_ open: Bool) {
         Haptic.soft()
         if open { focused = false; Task { await model.refreshList() } }
-        withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
+        withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { drawer.open = open; drawer.drag = 0 }
     }
 
     private func roundButton(_ system: String, _ label: String, _ action: @escaping () -> Void) -> some View {
@@ -804,6 +787,53 @@ extension BookChatView {
         .accessibilityLabel("Tal")
         .accessibilityHint("Hold inde og tal, slip for at sende")
     }
+}
+
+// ---- the drawer ------------------------------------------------------------------------
+// The drag used to be @State on the screen itself, so every frame of a swipe re-rendered the
+// whole screen: thread, cards, charts and composer, 60-120 times a second. Now the offset lives
+// here, and only two ViewModifiers watch it. A modifier's `content` is not re-evaluated when the
+// modifier's own state changes, so a swipe moves an already-drawn page instead of redrawing it.
+@MainActor final class DrawerState: ObservableObject {
+    @Published var open = false
+    @Published var drag: CGFloat = 0                      // live, while the finger is down
+    let width: CGFloat = UIScreen.main.bounds.width - 72
+    var offset: CGFloat { min(width, max(0, (open ? width : 0) + drag)) }
+    var amount: CGFloat { width > 0 ? offset / width : 0 }
+}
+
+/// The page is a card lying on the drawer that slides aside.
+struct DrawerPage: ViewModifier {
+    @ObservedObject var d: DrawerState
+    let close: () -> Void
+    func body(content: Content) -> some View {
+        let a = d.amount, off = d.offset
+        content
+            // The card's shape lives in its background, which runs to the screen's edges; the
+            // content stays inside the safe area, so nothing jumps when the drawer starts to open.
+            .background {
+                // No shadow at all while closed: an offscreen shadow pass under a full-screen card for nothing.
+                RoundedRectangle(cornerRadius: 44 * a, style: .continuous).fill(Theme.bg)
+                    .shadow(color: .black.opacity(0.5 * a), radius: off > 0 ? 24 : 0, x: off > 0 ? -8 : 0, y: 0)
+                    .ignoresSafeArea()
+            }
+            .overlay {
+                if off > 0 {
+                    RoundedRectangle(cornerRadius: 44 * a, style: .continuous).fill(Color.black.opacity(0.25 * a))
+                        .ignoresSafeArea()
+                        .onTapGesture { close() }
+                        .accessibilityLabel("Luk menuen")
+                        .accessibilityAddTraits(.isButton)
+                }
+            }
+            .offset(x: off)
+    }
+}
+
+/// The drawer underneath brightens as the page slides off it.
+struct DrawerFloor: ViewModifier {
+    @ObservedObject var d: DrawerState
+    func body(content: Content) -> some View { content.opacity(Double(0.35 + 0.65 * d.amount)) }
 }
 
 /// While Koda works: what it is looking at, line by line with the source's logo, then the text
