@@ -134,31 +134,52 @@ struct BookChatView: View {
     @State private var photo: UIImage? = nil
     @State private var showHistory = false
     @State private var showBook = false
+    @State private var showAgents = false
     @StateObject private var dictation = Dictation()
     @State private var pressStart: Date? = nil
     @State private var holdSend = false
     @FocusState private var focused: Bool
 
+    private let drawerWidth: CGFloat = 300
+
     var body: some View {
-        ZStack {
+        ZStack(alignment: .leading) {
             Theme.bg.ignoresSafeArea()
+            // The page itself slides to the right when the drawer opens, so the two are one surface.
             VStack(spacing: 0) {
                 topBar
                 if model.messages.isEmpty { emptyState } else { thread }
                 composer
             }
+            .offset(x: showHistory ? drawerWidth : 0)
+            .overlay {
+                if showHistory {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                        .onTapGesture { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                        .offset(x: drawerWidth)
+                }
+            }
+            .gesture(DragGesture(minimumDistance: 24).onEnded { g in
+                if !showHistory && g.startLocation.x < 36 && g.translation.width > 70 { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
+                if showHistory && g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+            })
+            HistoryView(model: model) { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                .frame(width: drawerWidth)
+                .background(Theme.surface.ignoresSafeArea())
+                .offset(x: showHistory ? 0 : -drawerWidth)
+                .gesture(DragGesture(minimumDistance: 24).onEnded { g in
+                    if g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                })
         }
+        .animation(.spring(duration: 0.3), value: showHistory)
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
         }
-        .overlay { drawer }
-        .gesture(DragGesture(minimumDistance: 24).onEnded { g in
-            if g.startLocation.x < 36 && g.translation.width > 70 { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
-        })
         .sheet(isPresented: $showBook) { BookSheet(model: model) }
+        .sheet(isPresented: $showAgents) { AgentsSheet(model: model) }
         .onChange(of: pick) { _, item in
             guard let item else { return }
             Task {
@@ -173,24 +194,6 @@ struct BookChatView: View {
         .alert("Kunne ikke svare", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
-    }
-
-    /// The history slides in from the left over the chat, like a drawer, and goes back the same way.
-    @ViewBuilder private var drawer: some View {
-        if showHistory {
-            ZStack(alignment: .leading) {
-                Color.black.opacity(0.55).ignoresSafeArea()
-                    .onTapGesture { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-                    .transition(.opacity)
-                HistoryView(model: model) { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-                    .frame(width: 304)
-                    .background(Theme.surface.ignoresSafeArea())
-                    .transition(.move(edge: .leading))
-                    .gesture(DragGesture(minimumDistance: 24).onEnded { g in
-                        if g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-                    })
-            }
-        }
     }
 
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
@@ -316,23 +319,10 @@ struct BookChatView: View {
                         .foregroundStyle(Theme.secondary)
                         .padding(.horizontal, 12).frame(height: 38)
                     } else {
-                    Menu {
-                        // Who answers. Koda alone, or tick the agents you want in the room.
-                        Button { model.selected = [] } label: {
-                            if model.selected.isEmpty { Label("Koda", systemImage: "checkmark") } else { Text("Koda") }
-                        }
-                        Divider()
-                        ForEach(model.agents) { a in
-                            Button {
-                                if model.selected.contains(a.id) { model.selected.remove(a.id) } else { model.selected.insert(a.id) }
-                            } label: {
-                                if model.selected.contains(a.id) { Label(a.name ?? a.id, systemImage: "checkmark") } else { Text(a.name ?? a.id) }
-                            }
-                        }
-                    } label: {
+                    Button { showAgents = true } label: {
                         HStack(spacing: 6) {
                             if model.selected.isEmpty { Image("Logo").resizable().scaledToFit().frame(width: 16, height: 16) }
-                            else { Image(systemName: "person.2").font(.system(size: 12, weight: .semibold)) }
+                            else { Image(systemName: "person.2.fill").font(.system(size: 12, weight: .semibold)) }
                             Text(model.roomLabel).font(.system(size: 14, weight: .medium)).lineLimit(1)
                             Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary)
                         }
@@ -532,6 +522,59 @@ struct HistoryView: View {
             }
         }
         .task { await model.refreshList() }
+    }
+}
+
+// ---- who is in the room -------------------------------------------------------------------
+// One screen for one decision: Koda alone, or which agents answer. Nothing else on it.
+struct AgentsSheet: View {
+    @ObservedObject var model: BookChatModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 8) {
+                    row(selected: model.selected.isEmpty, title: "Koda", subtitle: "Firmaets egen model. Kender bogen og markedet.", icon: AnyView(Image("Logo").resizable().scaledToFit().frame(width: 26, height: 26))) {
+                        model.selected = []
+                    }
+                    Text("ELLER INVITÉR AGENTER").font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 14).padding(.bottom, 2).padding(.horizontal, 4)
+                    ForEach(model.agents) { a in
+                        let on = model.selected.contains(a.id)
+                        row(selected: on, title: a.name ?? a.id, subtitle: a.role ?? "", icon: AnyView(initial(a.name ?? a.id))) {
+                            if on { model.selected.remove(a.id) } else { model.selected.insert(a.id) }
+                        }
+                    }
+                    Text("Vælg flere, så svarer de hver for sig på samme besked.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.horizontal, 4)
+                }.padding(16)
+            }
+            .background(Theme.bg)
+            .navigationTitle("Hvem svarer?").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Færdig") { dismiss() }.font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent) } }
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.large])
+    }
+    private func initial(_ name: String) -> some View {
+        Circle().fill(Theme.surface2).frame(width: 36, height: 36)
+            .overlay(Text(String(name.prefix(1)).uppercased()).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text))
+    }
+    private func row(selected: Bool, title: String, subtitle: String, icon: AnyView, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                icon.frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+                    if !subtitle.isEmpty { Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1) }
+                }
+                Spacer()
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.system(size: 22)).foregroundStyle(selected ? Theme.accent : Theme.secondary.opacity(0.5))
+            }
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(selected ? Theme.accent.opacity(0.6) : Theme.line, lineWidth: 1))
+        }.buttonStyle(.plain)
     }
 }
 
