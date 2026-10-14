@@ -807,7 +807,7 @@ struct LiveAnswer: View {
             ForEach(Array(lines.enumerated()), id: \.element.id) { i, l in
                 HStack(spacing: 8) {
                     if let lg = l.source?.logo, let u = URL(string: lg) {
-                        AsyncImage(url: u) { ph in if case .success(let im) = ph { im.resizable().scaledToFit() } else { Circle().fill(Theme.surface2) } }
+                        CachedImage(urls: [u], px: 48) { Circle().fill(Theme.surface2) }
                             .frame(width: 16, height: 16).clipShape(Circle())
                     } else {
                         Image(systemName: i == lines.count - 1 && text.isEmpty ? "magnifyingglass" : "checkmark")
@@ -1173,9 +1173,7 @@ struct BookBubble: View {
                 Spacer(minLength: 60)
                 VStack(alignment: .trailing, spacing: 6) {
                     if let u = imageURL {
-                        AsyncImage(url: u) { p in
-                            if case .success(let img) = p { img.resizable().scaledToFill() } else { Theme.surface2 }
-                        }
+                        CachedImage(urls: [u], px: 540, fill: true) { Theme.surface2 }
                         .frame(width: 180, height: 180).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     if let t = m.text, !t.isEmpty {
@@ -1361,7 +1359,7 @@ struct Sources: View {
     private func pill(_ src: SourceRow) -> some View {
                     HStack(spacing: 5) {
                         if let l = src.logo, let u = URL(string: l) {
-                            AsyncImage(url: u) { ph in if case .success(let i) = ph { i.resizable().scaledToFit() } else { icon(src.kind) } }
+                            CachedImage(urls: [u], px: 42) { icon(src.kind) }
                                 .frame(width: 14, height: 14).clipShape(Circle())
                         } else { icon(src.kind) }
                         Text(src.name ?? src.symbol ?? "").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.text.opacity(0.85)).lineLimit(1)
@@ -1516,16 +1514,7 @@ struct Tile: View {
 struct CoinLogo: View {
     let url: String?; let fallback: String?; var size: CGFloat = 36
     var body: some View {
-        AsyncImage(url: URL(string: url ?? "")) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFit()
-            case .failure:
-                AsyncImage(url: URL(string: fallback ?? "")) { p2 in
-                    if case .success(let img) = p2 { img.resizable().scaledToFit() } else { placeholder }
-                }
-            default: placeholder
-            }
-        }
+        CachedImage(url: url, fallback: fallback, px: Int(size * 3)) { placeholder }
         .frame(width: size, height: size).clipShape(Circle())
     }
     private var placeholder: some View {
