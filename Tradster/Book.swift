@@ -1,15 +1,14 @@
 import SwiftUI
 import Charts
+import PhotosUI
 
 // ---- Tradster: the book as a conversation --------------------------------------------
-// "Hvad koebte vi i dag?" Ask, and the answer comes back as text from the firm's own model
-// plus the coins it talks about as cards: name, logo, side, entry -> mark, basis points and
-// the hourly price since entry. The cards are built by plain code on the server from the
-// paper books on disk (GET /dashboard/book/today); the text is the model's (POST .../chat).
-// A number on a card never comes from the model.
-//
-// Look, by Marco's call (14 Oct 2026): like a chat app you would actually use -- one big
-// serif question on an empty screen, a composer at the bottom, no tabs, always dark.
+// One screen, always dark: a serif greeting on an empty screen, a composer card at the bottom.
+// Ask what we bought, sold, hold or closed; the answer is text from the firm's own model
+// ("Bogen") or from the agents invited into the room, with the coins as cards: logo, side,
+// entry -> mark, basis points and the hourly price since entry. Conversations live on the
+// server, so the history drawer on the left shows them on every phone. The plus sends a photo.
+// A number on a card never comes from a model: the server picks cards from the facts.
 
 struct BookPt: Codable, Hashable { let t: Double; let c: Double }
 struct BookCard: Codable, Identifiable, Hashable {
@@ -20,62 +19,101 @@ struct BookCard: Codable, Identifiable, Hashable {
     let opened_at: String?; let closes_at: String?; let closed_at: String?; let why: String?; let note: String?
     let today: Bool?; let series: [BookPt]?
 }
-struct BookFill: Codable, Hashable {
-    let at: String?; let book: String?; let symbol: String?; let side: String?; let size: Double?; let price: Double?
+struct BookToday: Codable { let at: String?; let headline: String?; let cards: [BookCard]? }
+struct AgentRow: Codable, Identifiable, Hashable { let id: String; let name: String?; let role: String? }
+struct AgentsPayload: Codable { let agents: [AgentRow]? }
+struct ServerMsg: Codable, Identifiable, Hashable {
+    var id: String { "\(at ?? "")/\(role ?? "")/\(from ?? "")/\((text ?? "").prefix(20))" }
+    let role: String?; let text: String?; let at: String?; let from: String?; let agent: String?
+    let cards: [BookCard]?; let image: String?
 }
-struct BookToday: Codable {
-    let at: String?; let headline: String?; let cards: [BookCard]?; let fills: [BookFill]?
+struct ConvRow: Codable, Identifiable, Hashable {
+    let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?
 }
-struct BookReply: Codable {
-    let role: String?; let text: String?; let at: String?; let cards: [BookCard]?; let model: String?; let cost: Double?; let error: String?
-}
-struct BookMsg: Identifiable, Hashable {
-    let id = UUID(); let role: String; let text: String; let at: String; let cards: [BookCard]
-}
+struct ConvList: Codable { let conversations: [ConvRow]? }
+struct ConvDoc: Codable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
+struct SendResult: Codable { let id: String?; let title: String?; let agents: [String]?; let replies: [ServerMsg]?; let error: String? }
 
 @MainActor final class BookChatModel: ObservableObject {
-    @Published var messages: [BookMsg] = []
+    @Published var messages: [ServerMsg] = []
+    @Published var conversationId: String? = nil
+    @Published var conversations: [ConvRow] = []
+    @Published var agents: [AgentRow] = []
+    @Published var selected: Set<String> = []
     @Published var sending = false
     @Published var error: String? = nil
     @Published var today: BookToday? = nil
 
     static let suggestions = ["Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
 
-    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil) -> URLRequest {
+    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval = 60) -> URLRequest {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/\(path)")!)
         r.httpMethod = method
         r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
         r.cachePolicy = .reloadIgnoringLocalCacheData
-        r.timeoutInterval = 90
+        r.timeoutInterval = timeout
         if let body {
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
             r.httpBody = try? JSONSerialization.data(withJSONObject: body)
         }
         return r
     }
-
-    /// The headline and the open legs, from disk, so the empty screen already knows the book.
-    func load() async {
-        guard let (d, _) = try? await URLSession.shared.data(for: request("today")),
-              let t = try? JSONDecoder().decode(BookToday.self, from: d) else { return }
-        today = t
+    private func fetch<T: Decodable>(_ path: String, _ type: T.Type) async -> T? {
+        guard let (d, _) = try? await URLSession.shared.data(for: request(path)) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: d)
     }
 
-    var openCards: [BookCard] { (today?.cards ?? []).filter { $0.status == "open" } }
+    func bootstrap() async {
+        async let t: BookToday? = fetch("today", BookToday.self)
+        async let a: AgentsPayload? = fetch("agents", AgentsPayload.self)
+        async let c: ConvList? = fetch("conversations", ConvList.self)
+        today = await t
+        if let v = await a?.agents { agents = v }
+        if let v = await c?.conversations { conversations = v }
+    }
+    func refreshList() async { if let v = await fetch("conversations", ConvList.self)?.conversations { conversations = v } }
 
-    func send(_ text: String) async {
+    var openCards: [BookCard] { (today?.cards ?? []).filter { $0.status == "open" } }
+    var roomLabel: String {
+        if selected.isEmpty { return "Bogen" }
+        let names = agents.filter { selected.contains($0.id) }.map { $0.name ?? $0.id }
+        return names.count > 2 ? "\(names[0]), \(names[1]) +\(names.count - 2)" : names.joined(separator: ", ")
+    }
+
+    func open(_ id: String) async {
+        guard let doc = await fetch("conversations/\(id)", ConvDoc.self) else { return }
+        conversationId = doc.id
+        messages = doc.messages ?? []
+        selected = Set(doc.agents ?? [])
+    }
+    func newChat() { conversationId = nil; messages = []; selected = [] }
+    func delete(_ id: String) async {
+        _ = try? await URLSession.shared.data(for: request("conversations/\(id)", method: "DELETE"))
+        if conversationId == id { newChat() }
+        await refreshList()
+    }
+
+    func send(_ text: String, image: UIImage? = nil) async {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty, !sending else { return }
+        guard !body.isEmpty || image != nil, !sending else { return }
         sending = true
-        let history = messages.suffix(12).map { ["role": $0.role, "text": $0.text] }
-        messages.append(BookMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), cards: []))
+        var payload: [String: Any] = ["message": body, "agents": Array(selected)]
+        var localImage: String? = nil
+        if let image, let jpeg = image.tradsterJPEG() {
+            payload["image"] = jpeg.base64EncodedString()
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
+            try? jpeg.write(to: tmp); localImage = tmp.absoluteString
+        }
+        messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage))
         do {
-            let (d, resp) = try await URLSession.shared.data(for: request("chat", method: "POST", body: ["message": body, "history": history]))
-            let p = try? JSONDecoder().decode(BookReply.self, from: d)
+            let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
+            let p = try? JSONDecoder().decode(SendResult.self, from: d)
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
                 error = p?.error ?? "HTTP \(h.statusCode)"
-            } else if let p, let t = p.text {
-                messages.append(BookMsg(role: "assistant", text: t, at: p.at ?? "", cards: p.cards ?? []))
+            } else if let p {
+                if let id = p.id { conversationId = id }
+                messages.append(contentsOf: p.replies ?? [])
+                await refreshList()
             } else {
                 error = "Intet svar"
             }
@@ -84,14 +122,16 @@ struct BookMsg: Identifiable, Hashable {
         }
         sending = false
     }
-
-    func clear() { messages = [] }
 }
 
 // ---- the one screen ---------------------------------------------------------------------
 struct BookChatView: View {
     @StateObject private var model = BookChatModel()
     @State private var draft = ""
+    @State private var pick: PhotosPickerItem? = nil
+    @State private var photo: UIImage? = nil
+    @State private var showHistory = false
+    @State private var showBook = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -99,76 +139,75 @@ struct BookChatView: View {
             Theme.bg.ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
-                if model.messages.isEmpty {
-                    emptyState
-                } else {
-                    thread
-                }
+                if model.messages.isEmpty { emptyState } else { thread }
                 composer
             }
         }
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
-        .task { await model.load() }
+        .task { await model.bootstrap() }
+        .sheet(isPresented: $showHistory) { HistoryView(model: model) }
+        .sheet(isPresented: $showBook) { BookSheet(model: model) }
+        .onChange(of: pick) { _, item in
+            guard let item else { return }
+            Task {
+                if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) { photo = img }
+                pick = nil
+            }
+        }
         .alert("Kunne ikke svare", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
     }
 
-    private var topBar: some View {
-        HStack {
-            Text("Tradster").font(.system(size: 17, weight: .semibold, design: .serif)).foregroundStyle(Theme.text)
-            Spacer()
-            if !model.messages.isEmpty {
-                Button { withAnimation { model.clear() } } label: {
-                    Image(systemName: "square.and.pencil").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.secondary)
-                }
-            }
+    private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
+                .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
         }
-        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 6)
     }
 
-    /// The question, alone on the screen, until he asks one.
-    private var emptyState: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                Spacer(minLength: 70)
-                Image(systemName: "asterisk").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.accent).padding(.bottom, 22)
-                Text("Hvad vil du vide\nom bogen?")
-                    .font(.system(size: 36, weight: .regular, design: .serif))
-                    .foregroundStyle(Theme.text).multilineTextAlignment(.center).lineSpacing(2)
-                if let h = model.today?.headline {
-                    Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary)
-                        .multilineTextAlignment(.center).padding(.top, 16).padding(.horizontal, 36)
-                }
-                VStack(spacing: 8) {
-                    ForEach(BookChatModel.suggestions.prefix(3), id: \.self) { s in
-                        Button { Task { await model.send(s) } } label: {
-                            HStack {
-                                Text(s).font(.system(size: 15)).foregroundStyle(Theme.text)
-                                Spacer()
-                                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 13)
-                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }.buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 20).padding(.top, 40)
-                if !model.openCards.isEmpty {
-                    HStack(spacing: -8) {
-                        ForEach(model.openCards.prefix(6)) { c in
-                            CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 26)
-                                .overlay(Circle().stroke(Theme.bg, lineWidth: 2))
-                        }
-                        Text("\(model.openCards.count) ben åbne").font(.system(size: 12)).foregroundStyle(Theme.secondary).padding(.leading, 16)
-                    }
-                    .padding(.top, 28)
-                }
-                Spacer(minLength: 40)
+    private var topBar: some View {
+        HStack {
+            roundButton("line.3.horizontal") { showHistory = true }
+            Spacer()
+            if !model.messages.isEmpty {
+                Text(model.roomLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.secondary)
+                Spacer()
+            }
+            roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil") {
+                if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
             }
         }
-        .scrollDismissesKeyboard(.interactively)
+        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 4)
+    }
+
+    private var greeting: String {
+        let h = Calendar.current.component(.hour, from: Date())
+        switch h {
+        case 5..<10: return "Godmorgen, hvad vil du vide?"
+        case 10..<18: return "Goddag, hvordan går det?"
+        default: return "Godaften, hvordan går det?"
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            Image(systemName: "asterisk").font(.system(size: 34, weight: .semibold)).foregroundStyle(Theme.accent).padding(.bottom, 26)
+            Text(greeting)
+                .font(.system(size: 30, weight: .regular, design: .serif))
+                .foregroundStyle(Theme.text).multilineTextAlignment(.center).padding(.horizontal, 28)
+            if let h = model.today?.headline {
+                Text(h).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center).padding(.top, 14).padding(.horizontal, 40)
+            }
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = false }
     }
 
     private var thread: some View {
@@ -177,8 +216,11 @@ struct BookChatView: View {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(model.messages) { m in BookBubble(m: m) }
                     if model.sending {
-                        HStack(spacing: 8) { Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent); TypingDots() }
-                            .padding(.horizontal, 20).id("typing")
+                        HStack(spacing: 8) {
+                            Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                            TypingDots()
+                            Text(model.selected.isEmpty ? "" : "\(model.roomLabel) tænker").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        }.padding(.horizontal, 20).id("typing")
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(.vertical, 14)
@@ -186,67 +228,192 @@ struct BookChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
+            .onAppear { proxy.scrollTo("bottom") }
         }
     }
 
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty && !model.sending }
+    private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespaces).isEmpty || photo != nil) && !model.sending }
 
     private var composer: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .bottom, spacing: 10) {
-                Menu {
-                    ForEach(BookChatModel.suggestions, id: \.self) { s in
-                        Button(s) { Task { await model.send(s) } }
-                    }
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
-                        .frame(width: 34, height: 34).background(Theme.surface2, in: Circle())
+            VStack(alignment: .leading, spacing: 8) {
+                if let photo {
+                    ZStack(alignment: .topTrailing) {
+                        Image(uiImage: photo).resizable().scaledToFill().frame(width: 84, height: 84).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        Button { self.photo = nil } label: {
+                            Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.bg)
+                                .frame(width: 20, height: 20).background(Theme.text, in: Circle())
+                        }.offset(x: 6, y: -6)
+                    }.padding(.leading, 6).padding(.top, 4)
                 }
-                TextField("", text: $draft, prompt: Text("Spørg bogen").foregroundStyle(Theme.secondary), axis: .vertical)
+                TextField("", text: $draft, prompt: Text(model.selected.isEmpty ? "Spørg bogen" : "Skriv til \(model.roomLabel)").foregroundStyle(Theme.secondary), axis: .vertical)
                     .lineLimit(1...6).focused($focused)
                     .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
-                    .padding(.vertical, 7)
-                Button {
-                    let t = draft; draft = ""
-                    Task { await model.send(t) }
-                } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(canSend ? Theme.bg : Theme.secondary)
-                        .frame(width: 34, height: 34)
-                        .background(canSend ? Theme.accent : Theme.surface2, in: Circle())
+                    .padding(.horizontal, 8).padding(.top, 6)
+                HStack(spacing: 8) {
+                    PhotosPicker(selection: $pick, matching: .images) {
+                        Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
+                            .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
+                    }
+                    Menu {
+                        Section("I rummet") {
+                            Button { model.selected = [] } label: {
+                                Label("Bogen (firmaets model)", systemImage: model.selected.isEmpty ? "checkmark" : "")
+                            }
+                        }
+                        Section("Agenter — vælg én eller flere") {
+                            ForEach(model.agents) { a in
+                                Button {
+                                    if model.selected.contains(a.id) { model.selected.remove(a.id) } else { model.selected.insert(a.id) }
+                                } label: {
+                                    Label(a.name ?? a.id, systemImage: model.selected.contains(a.id) ? "checkmark" : "")
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: model.selected.isEmpty ? "asterisk" : "person.2").font(.system(size: 12, weight: .semibold))
+                            Text(model.roomLabel).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary)
+                        }
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 12).frame(height: 38).background(Theme.surface2, in: Capsule())
+                    }
+                    Spacer()
+                    Button {
+                        let t = draft, p = photo; draft = ""; photo = nil
+                        Task { await model.send(t, image: p) }
+                    } label: {
+                        Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(canSend ? Theme.bg : Theme.secondary)
+                            .frame(width: 38, height: 38)
+                            .background(canSend ? Theme.text : Theme.surface2, in: Circle())
+                    }
+                    .disabled(!canSend)
                 }
-                .disabled(!canSend)
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
+            .padding(10)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Theme.line, lineWidth: 1))
-            .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 10)
-            Text("Papir på Kraken · ingen rigtige penge").font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.7)).padding(.bottom, 4)
+            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
         }
         .background(Theme.bg)
     }
 }
 
+// ---- history drawer -----------------------------------------------------------------------
+struct HistoryView: View {
+    @ObservedObject var model: BookChatModel
+    @Environment(\.dismiss) private var dismiss
+    private var groups: [(String, [ConvRow])] {
+        let cal = Calendar.current
+        var today: [ConvRow] = [], week: [ConvRow] = [], older: [ConvRow] = []
+        for c in model.conversations {
+            let d = ISO8601DateFormatter.withFraction.date(from: c.updated ?? "") ?? ISO8601DateFormatter().date(from: c.updated ?? "") ?? .distantPast
+            if cal.isDateInToday(d) { today.append(c) }
+            else if d > Date().addingTimeInterval(-7 * 86400) { week.append(c) }
+            else { older.append(c) }
+        }
+        return [("I dag", today), ("Sidste 7 dage", week), ("Ældre", older)].filter { !$0.1.isEmpty }
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Button {
+                    model.newChat(); dismiss()
+                } label: {
+                    Label("Ny samtale", systemImage: "square.and.pencil").foregroundStyle(Theme.text)
+                }.listRowBackground(Theme.surface)
+                ForEach(groups, id: \.0) { title, rows in
+                    Section(title) {
+                        ForEach(rows) { c in
+                            Button {
+                                Task { await model.open(c.id); dismiss() }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(c.title ?? "Samtale").font(.system(size: 16, weight: .medium)).foregroundStyle(Theme.text).lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text((c.agents ?? []).isEmpty ? "Bogen" : (c.agents ?? []).map { id in model.agents.first { $0.id == id }?.name ?? id }.joined(separator: ", "))
+                                        Text("·"); Text(Tradster.when(c.updated))
+                                    }.font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
+                                }
+                            }
+                            .listRowBackground(c.id == model.conversationId ? Theme.surface2 : Theme.surface)
+                            .swipeActions { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle("Samtaler").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } }
+            .overlay { if model.conversations.isEmpty { Text("Ingen samtaler endnu").foregroundStyle(Theme.secondary) } }
+            .task { await model.refreshList() }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+// ---- the book, right now: every open leg -------------------------------------------------
+struct BookSheet: View {
+    @ObservedObject var model: BookChatModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let h = model.today?.headline { Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(.bottom, 4) }
+                    ForEach(model.openCards) { CoinCard(c: $0) }
+                    if model.openCards.isEmpty { Text("Bogen er flad.").foregroundStyle(Theme.secondary) }
+                }.padding(16)
+            }
+            .background(Theme.bg)
+            .navigationTitle("Bogen lige nu").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } }
+            .refreshable { await model.bootstrap() }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
 // ---- messages ---------------------------------------------------------------------------
 struct BookBubble: View {
-    let m: BookMsg
+    let m: ServerMsg
     private var mine: Bool { m.role == "user" }
+    private var imageURL: URL? {
+        guard let s = m.image, !s.isEmpty else { return nil }
+        return s.hasPrefix("/") ? URL(string: "https://getstubbie.com\(s)") : URL(string: s)
+    }
     var body: some View {
         if mine {
             HStack {
                 Spacer(minLength: 60)
-                Text(m.text).font(.system(size: 16)).foregroundStyle(Theme.text).textSelection(.enabled)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let u = imageURL {
+                        AsyncImage(url: u) { p in
+                            if case .success(let img) = p { img.resizable().scaledToFill() } else { Theme.surface2 }
+                        }
+                        .frame(width: 180, height: 180).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    if let t = m.text, !t.isEmpty {
+                        Text(t).font(.system(size: 16)).foregroundStyle(Theme.text).textSelection(.enabled)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                }
             }.padding(.horizontal, 16)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5)
-                    Text(m.text).font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
+                    Image(systemName: m.agent == nil ? "asterisk" : "person.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let f = m.from, f != "Bogen" { Text(f).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary) }
+                        Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
+                    }
                 }
-                if !m.cards.isEmpty {
-                    VStack(spacing: 8) { ForEach(m.cards) { CoinCard(c: $0) } }.padding(.leading, 22)
+                if let cs = m.cards, !cs.isEmpty {
+                    VStack(spacing: 8) { ForEach(cs) { CoinCard(c: $0) } }.padding(.leading, 22)
                 }
             }.padding(.horizontal, 20)
         }
@@ -372,6 +539,18 @@ extension ISO8601DateFormatter {
     static let withFraction: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
+}
+
+extension UIImage {
+    /// At most 1280 px on the long side, JPEG: a photo of a chart, not a 12 MB original.
+    func tradsterJPEG() -> Data? {
+        let longest = max(size.width, size.height)
+        let scale = longest > 1280 ? 1280 / longest : 1
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        let r = UIGraphicsImageRenderer(size: target, format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }())
+        let img = r.image { _ in draw(in: CGRect(origin: .zero, size: target)) }
+        return img.jpegData(compressionQuality: 0.8)
+    }
 }
 
 struct TypingDots: View {
