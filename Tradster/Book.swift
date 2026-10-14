@@ -395,7 +395,12 @@ struct BookChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(model.messages) { m in BookBubble(m: m).id(m.id) }
+                        ForEach(model.messages) { m in
+                            BookBubble(m: m, question: m.role == "user" ? nil : question(before: m), busy: model.sending,
+                                       ask: { q in focused = false; model.send(q) },
+                                       edit: { t in draft = t; focused = true })
+                                .id(m.id)
+                        }
                         if model.sending {
                             LiveAnswer(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker",
                                        lines: model.statusLines, text: model.streamText).padding(.horizontal, 20)
@@ -423,6 +428,12 @@ struct BookChatView: View {
                 }
             }
         }
+    }
+
+    /// The question an answer was given to: the nearest of yours above it.
+    private func question(before m: ServerMsg) -> String? {
+        guard let i = model.messages.firstIndex(of: m) else { return nil }
+        return model.messages[..<i].last(where: { $0.role == "user" && !($0.text ?? "").isEmpty })?.text
     }
 
     private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
@@ -873,7 +884,13 @@ struct BookSheet: View {
 // ---- messages ---------------------------------------------------------------------------
 struct BookBubble: View {
     let m: ServerMsg
+    var question: String? = nil              // what this answer answered, for "Spørg igen"
+    var busy = false
+    var ask: (String) -> Void = { _ in }
+    var edit: (String) -> Void = { _ in }
     private var mine: Bool { m.role == "user" }
+    /// The words without the markdown, for the clipboard and the share sheet.
+    private var plain: String { String(AnswerText.inline(m.text ?? "").characters) }
     private var imageURL: URL? {
         guard let s = m.image, !s.isEmpty else { return nil }
         return s.hasPrefix("/") ? URL(string: "https://getstubbie.com\(s)") : URL(string: s)
@@ -890,9 +907,15 @@ struct BookBubble: View {
                         .frame(width: 180, height: 180).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     if let t = m.text, !t.isEmpty {
-                        Text(t).font(.system(size: 16)).foregroundStyle(Theme.text).textSelection(.enabled)
+                        Text(t).font(.system(size: 16)).foregroundStyle(Theme.text)
                             .padding(.horizontal, 14).padding(.vertical, 10)
                             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .contextMenu {
+                                Button { UIPasteboard.general.string = t; Haptic.done() } label: { Label("Kopiér", systemImage: "doc.on.doc") }
+                                Button { edit(t) } label: { Label("Ret og send igen", systemImage: "pencil") }
+                                ShareLink(item: t) { Label("Del", systemImage: "square.and.arrow.up") }
+                            }
                     }
                 }
             }.padding(.horizontal, 16)
@@ -903,7 +926,21 @@ struct BookBubble: View {
                 if let f = m.from, m.agent != nil {
                     Text(f.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.accent)
                 }
-                AnswerText(text: m.text ?? "").textSelection(.enabled)
+                if let t = m.text, !t.isEmpty {
+                    // Long-press: copy, share, or ask the same question again.
+                    AnswerText(text: t)
+                        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = plain; Haptic.done() } label: { Label("Kopiér", systemImage: "doc.on.doc") }
+                            ShareLink(item: plain) { Label("Del", systemImage: "square.and.arrow.up") }
+                            if let q = question {
+                                Button { ask(q) } label: { Label("Spørg igen", systemImage: "arrow.clockwise") }.disabled(busy)
+                            }
+                        } preview: {
+                            AnswerText(text: String(t.prefix(700)) + (t.count > 700 ? " …" : ""))
+                                .padding(18).frame(width: 340).background(Theme.bg)
+                        }
+                }
                 if let cs = m.cards, !cs.isEmpty { CardStrip(cards: cs).padding(.top, 2).padding(.horizontal, -20) }
                 if let src = m.sources, !src.isEmpty { Sources(items: src) }
             }.padding(.horizontal, 20)
