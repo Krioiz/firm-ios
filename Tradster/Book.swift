@@ -591,9 +591,11 @@ struct Thinking: View {
             Image("Logo").resizable().scaledToFit().frame(width: 22, height: 22)
                 .scaleEffect(on ? 1.08 : 0.92).opacity(on ? 1 : 0.55)
                 .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
-            if !label.isEmpty { Text(label).font(.system(size: 15)).foregroundStyle(Theme.secondary) }
-                .opacity(on ? 1 : 0.5)
-                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
+            if !label.isEmpty {
+                Text(label).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                    .opacity(on ? 1 : 0.5)
+                    .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
+            }
         }
         .onAppear { on = true }
     }
