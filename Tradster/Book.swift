@@ -584,10 +584,12 @@ struct BookChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(model.messages) { m in
-                            BookBubble(m: m, question: m.role == "user" ? nil : question(before: m), busy: model.sending,
+                        let qs = Self.questions(model.messages)
+                        ForEach(Array(model.messages.enumerated()), id: \.element.id) { i, m in
+                            BookBubble(m: m, question: qs[i], busy: model.sending,
                                        ask: { q in focused = false; model.send(q) },
                                        edit: { t in draft = t; focused = true })
+                                .equatable()
                                 .id(m.id)
                         }
                         if model.sending {
@@ -640,10 +642,15 @@ struct BookChatView: View {
         }
     }
 
-    /// The question an answer was given to: the nearest of yours above it.
-    private func question(before m: ServerMsg) -> String? {
-        guard let i = model.messages.firstIndex(of: m) else { return nil }
-        return model.messages[..<i].last(where: { $0.role == "user" && !($0.text ?? "").isEmpty })?.text
+    /// For each answer, the question it was given to: the nearest of yours above it. One pass;
+    /// it used to be a firstIndex(of:) with a deep compare of every message, per bubble, per render.
+    static func questions(_ ms: [ServerMsg]) -> [String?] {
+        var out: [String?] = [], last: String? = nil
+        out.reserveCapacity(ms.count)
+        for m in ms {
+            if m.role == "user" { out.append(nil); if let t = m.text, !t.isEmpty { last = t } } else { out.append(last) }
+        }
+        return out
     }
 
     private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
@@ -819,7 +826,7 @@ struct LiveAnswer: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
             if text.isEmpty { Thinking(label: lines.isEmpty ? label : "") }
-            else { AnswerText(text: text) }
+            else { AnswerText(text: text, keep: false) }
         }
         .animation(.easeOut(duration: 0.2), value: lines.count)
     }
@@ -1154,7 +1161,10 @@ struct BookSheet: View {
 }
 
 // ---- messages ---------------------------------------------------------------------------
-struct BookBubble: View {
+/// Equatable on what it shows, so a re-render of the thread (a keystroke, a token, the drawer)
+/// skips every finished bubble instead of rebuilding its markdown, cards and charts.
+struct BookBubble: View, Equatable {
+    static func == (a: BookBubble, b: BookBubble) -> Bool { a.m == b.m && a.question == b.question && a.busy == b.busy }
     let m: ServerMsg
     var question: String? = nil              // what this answer answered, for "Spørg igen"
     var busy = false
@@ -1198,7 +1208,7 @@ struct BookBubble: View {
                 }
                 if let t = m.text, !t.isEmpty {
                     // Long-press: copy, share, or ask the same question again.
-                    AnswerText(text: t)
+                    AnswerText(text: t).equatable()
                         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .contextMenu {
                             Button { UIPasteboard.general.string = plain; Haptic.done() } label: { Label("Kopiér", systemImage: "doc.on.doc") }
@@ -1220,48 +1230,73 @@ struct BookBubble: View {
 
 /// Answers in light markdown: **bold**, *italic*, `code` and links inline; bullet and numbered
 /// lines as a hanging list; short headings in the serif. Digits are tabular, so numbers line up.
-struct AnswerText: View {
+struct AnswerText: View, Equatable {
     let text: String
     var size: CGFloat = 16.5
-    private enum Block { case para(String), bullet(String), numbered(String, String), heading(String) }
-    private var blocks: [Block] {
+    /// Finished answers keep their parsed blocks; the live answer does not (it changes 20 times a second).
+    var keep = true
+    static func == (a: AnswerText, b: AnswerText) -> Bool { a.text == b.text && a.size == b.size }
+
+    fileprivate enum Block { case para(AttributedString), bullet(AttributedString), numbered(String, AttributedString), heading(AttributedString) }
+    private final class Parsed { let blocks: [Block]; init(_ b: [Block]) { blocks = b } }
+    private final class Inline { let value: AttributedString; init(_ v: AttributedString) { value = v } }
+    // Markdown is parsed once per text, not once per render: every token of a streamed answer used to
+    // re-parse every visible bubble above it. The inline cache also covers the live answer, whose
+    // finished paragraphs are then not parsed again as the last one grows.
+    private static let parsed: NSCache<NSString, Parsed> = { let c = NSCache<NSString, Parsed>(); c.countLimit = 300; return c }()
+    private static let inlines: NSCache<NSString, Inline> = { let c = NSCache<NSString, Inline>(); c.countLimit = 3000; return c }()
+    private static let bulletRx = try! NSRegularExpression(pattern: #"^[-*•]\s+"#)
+    private static let numberRx = try! NSRegularExpression(pattern: #"^\d{1,2}[.)]\s+"#)
+    private static let headingRx = try! NSRegularExpression(pattern: #"^#{1,4}\s+"#)
+
+    private static func prefix(_ rx: NSRegularExpression, _ line: String) -> String.Index? {
+        let ns = line as NSString
+        guard let m = rx.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return Range(m.range, in: line)?.upperBound
+    }
+    private static func blocks(_ text: String, keep: Bool) -> [Block] {
+        if keep, let p = parsed.object(forKey: text as NSString) { return p.blocks }
         var out: [Block] = [], para: [String] = []
-        func flush() { if !para.isEmpty { out.append(.para(para.joined(separator: "\n"))); para = [] } }
+        func flush() { if !para.isEmpty { out.append(.para(inline(para.joined(separator: "\n")))); para = [] } }
         for raw in text.components(separatedBy: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { flush(); continue }
-            if let r = line.range(of: #"^[-*•]\s+"#, options: .regularExpression) {
-                flush(); out.append(.bullet(String(line[r.upperBound...])))
-            } else if let r = line.range(of: #"^\d{1,2}[.)]\s+"#, options: .regularExpression) {
-                flush(); out.append(.numbered(line[..<r.upperBound].trimmingCharacters(in: .whitespaces), String(line[r.upperBound...])))
-            } else if let r = line.range(of: #"^#{1,4}\s+"#, options: .regularExpression) {
-                flush(); out.append(.heading(String(line[r.upperBound...])))
+            if let r = prefix(bulletRx, line) {
+                flush(); out.append(.bullet(inline(String(line[r...]))))
+            } else if let r = prefix(numberRx, line) {
+                flush(); out.append(.numbered(line[..<r].trimmingCharacters(in: .whitespaces), inline(String(line[r...]))))
+            } else if let r = prefix(headingRx, line) {
+                flush(); out.append(.heading(inline(String(line[r...]))))
             } else { para.append(line) }
         }
         flush()
+        if keep { parsed.setObject(Parsed(out), forKey: text as NSString) }
         return out
     }
     static func inline(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+        if let v = inlines.object(forKey: s as NSString) { return v.value }
+        let v = (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+        inlines.setObject(Inline(v), forKey: s as NSString)
+        return v
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
+            ForEach(Array(Self.blocks(text, keep: keep).enumerated()), id: \.offset) { _, b in
                 switch b {
                 case .para(let t):
-                    Text(Self.inline(t))
+                    Text(t)
                 case .bullet(let t):
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text("•").foregroundStyle(Theme.secondary)
-                        Text(Self.inline(t))
+                        Text(t)
                     }.padding(.leading, 2)
                 case .numbered(let n, let t):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(n).foregroundStyle(Theme.secondary).frame(minWidth: 20, alignment: .trailing)
-                        Text(Self.inline(t))
+                        Text(t)
                     }
                 case .heading(let t):
-                    Text(Self.inline(t)).font(.system(size: size + 2, weight: .semibold, design: .serif)).padding(.top, 4)
+                    Text(t).font(.system(size: size + 2, weight: .semibold, design: .serif)).padding(.top, 4)
                 }
             }
         }
