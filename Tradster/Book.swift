@@ -151,6 +151,9 @@ struct BookChatView: View {
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
+        .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
+            if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
+        }
         .overlay { drawer }
         .gesture(DragGesture(minimumDistance: 24).onEnded { g in
             if g.startLocation.x < 36 && g.translation.width > 70 { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
@@ -232,6 +235,27 @@ struct BookChatView: View {
                 Text(h).font(.system(size: 13)).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).padding(.top, 14).padding(.horizontal, 40)
             }
+            // The open legs as a row of logos; tap it for the whole book.
+            if !model.openCards.isEmpty {
+                Button { showBook = true } label: {
+                    HStack(spacing: 0) {
+                        HStack(spacing: -9) {
+                            ForEach(model.openCards.prefix(8)) { c in
+                                CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 30)
+                                    .overlay(Circle().stroke(Theme.bg, lineWidth: 2))
+                            }
+                        }
+                        if model.openCards.count > 8 {
+                            Text("+\(model.openCards.count - 8)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary).padding(.leading, 8)
+                        }
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.secondary).padding(.leading, 8)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Theme.surface, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 22)
+            }
             Spacer()
             Spacer()
         }
@@ -293,18 +317,16 @@ struct BookChatView: View {
                         .padding(.horizontal, 12).frame(height: 38)
                     } else {
                     Menu {
-                        Section("I rummet") {
-                            Button { model.selected = [] } label: {
-                                Label("Koda (firmaets model)", systemImage: model.selected.isEmpty ? "checkmark" : "")
-                            }
+                        // Who answers. Koda alone, or tick the agents you want in the room.
+                        Button { model.selected = [] } label: {
+                            if model.selected.isEmpty { Label("Koda", systemImage: "checkmark") } else { Text("Koda") }
                         }
-                        Section("Agenter — vælg én eller flere") {
-                            ForEach(model.agents) { a in
-                                Button {
-                                    if model.selected.contains(a.id) { model.selected.remove(a.id) } else { model.selected.insert(a.id) }
-                                } label: {
-                                    Label(a.name ?? a.id, systemImage: model.selected.contains(a.id) ? "checkmark" : "")
-                                }
+                        Divider()
+                        ForEach(model.agents) { a in
+                            Button {
+                                if model.selected.contains(a.id) { model.selected.remove(a.id) } else { model.selected.insert(a.id) }
+                            } label: {
+                                if model.selected.contains(a.id) { Label(a.name ?? a.id, systemImage: "checkmark") } else { Text(a.name ?? a.id) }
                             }
                         }
                     } label: {

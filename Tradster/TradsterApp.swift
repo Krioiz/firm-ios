@@ -8,6 +8,7 @@ import SwiftUI
 
 @main
 struct TradsterApp: App {
+    @UIApplicationDelegateAdaptor(Push.self) var push
     var body: some Scene {
         WindowGroup { TradsterRoot() }
     }

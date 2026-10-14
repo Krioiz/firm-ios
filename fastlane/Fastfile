@@ -20,6 +20,17 @@ def prepare(type, ids = nil)
     Spaceship::ConnectAPI::BundleId.create(name: nice, identifier: bid, platform: "IOS")
     UI.message("created bundle id #{bid}")
   end
+  # Tradster pushes from itself, so its bundle id needs the push capability before match makes
+  # the profile. Idempotent: an existing capability raises, and that is fine.
+  if ids.include?("com.getstubbie.tradster")
+    begin
+      b = Spaceship::ConnectAPI::BundleId.all.find { |x| x.identifier == "com.getstubbie.tradster" }
+      b.create_capability(Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS) if b
+      UI.message("push capability on com.getstubbie.tradster")
+    rescue => e
+      UI.message("push capability: #{e.message[0, 140]}")
+    end
+  end
   match(type: type, app_identifier: ids, api_key: api, readonly: false,
         # 14 Oct 2026: the certificates moved to their own PRIVATE repo so this one can be public
         # (public = free macOS runners). The job's own GITHUB_TOKEN cannot see another repo, so
@@ -36,6 +47,10 @@ def prepare(type, ids = nil)
     spec = File.read("../project.yml")
     File.write("../project.yml", spec.gsub("match Development ", "match AppStore "))
     UI.message("project.yml switched to the AppStore profiles")
+    # An App Store profile carries aps-environment production; the entitlements file must agree.
+    ["../Tradster/Tradster.entitlements", "../Firm/Firm.entitlements"].each do |ent|
+      File.write(ent, File.read(ent).gsub("<string>development</string>", "<string>production</string>")) if File.exist?(ent)
+    end
   end
   sh "cd .. && xcodegen generate"
   api
