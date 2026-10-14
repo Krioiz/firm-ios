@@ -814,6 +814,11 @@ struct LiveAnswer: View {
 struct SettingsSheet: View {
     @AppStorage("stream") private var stream = true
     @State private var facts: [String] = []
+    @State private var provider = ""
+    @State private var model = ""
+    @State private var keyDraft = ""
+    @State private var keyBusy = false
+    @State private var keyNote: String? = nil
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -826,6 +831,27 @@ struct SettingsSheet: View {
                         }
                     }.tint(Theme.accent)
                 }.listRowBackground(Theme.surface)
+                // The Claude API key, pasted here from the phone. It goes straight to the server, which
+                // checks it with Anthropic and stores it; the app never keeps it.
+                Section {
+                    HStack {
+                        Text("Model").foregroundStyle(Theme.text)
+                        Spacer()
+                        Text(provider == "claude" ? "Claude · \(model)" : provider == "openrouter" ? "OpenRouter · \(model)" : "ingen").foregroundStyle(Theme.secondary).lineLimit(1)
+                    }
+                    SecureField("", text: $keyDraft, prompt: Text("Indsæt Claude API-nøgle (sk-ant-…)").foregroundStyle(Theme.secondary))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Theme.text)
+                    Button {
+                        Task { await saveKey() }
+                    } label: {
+                        HStack { if keyBusy { ProgressView().tint(Theme.accent) }; Text(provider == "claude" ? "Skift nøgle" : "Brug Claude") }
+                    }
+                    .disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty || keyBusy)
+                    .foregroundStyle(Theme.accent)
+                    if let keyNote { Text(keyNote).font(.system(size: 12)).foregroundStyle(keyNote.hasPrefix("Gemt") ? Theme.up : Theme.down) }
+                } header: { Text("Kodas model") } footer: {
+                    Text("Lav nøglen på platform.claude.com → API keys. Den gemmes kun på serveren.").foregroundStyle(Theme.secondary)
+                }.listRowBackground(Theme.surface)
                 Section("Hvad Koda husker om dig") {
                     if facts.isEmpty { Text("Intet endnu").foregroundStyle(Theme.secondary) }
                     ForEach(Array(facts.enumerated()), id: \.offset) { i, f in
@@ -837,9 +863,26 @@ struct SettingsSheet: View {
             .scrollContentBackground(.hidden).background(Theme.bg)
             .navigationTitle("Indstillinger").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Færdig") { dismiss() }.foregroundStyle(Theme.accent) } }
-            .task { await load() }
+            .task { await load(); await loadLLM() }
         }
         .preferredColorScheme(.dark)
+    }
+    private func loadLLM() async {
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/settings/llm")!); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        guard let (d, _) = try? await URLSession.shared.data(for: r), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        provider = j["provider"] as? String ?? ""; model = j["model"] as? String ?? ""
+    }
+    private func saveKey() async {
+        keyBusy = true; keyNote = nil
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/settings/anthropic-key")!)
+        r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type"); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["key": keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)])
+        if let (d, resp) = try? await URLSession.shared.data(for: r) {
+            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+            if (resp as? HTTPURLResponse)?.statusCode == 200 { keyNote = "Gemt. Koda bruger nu Claude."; keyDraft = ""; Haptic.done(); await loadLLM() }
+            else { keyNote = j?["error"] as? String ?? "Kunne ikke gemme."; Haptic.fail() }
+        } else { keyNote = "Ingen forbindelse."; Haptic.fail() }
+        keyBusy = false
     }
     /// The server's shape is read loosely: a list of strings, or of objects with a text field.
     private func load() async {
