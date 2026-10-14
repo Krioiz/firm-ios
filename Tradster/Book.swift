@@ -132,6 +132,9 @@ struct BookChatView: View {
     @State private var photo: UIImage? = nil
     @State private var showHistory = false
     @State private var showBook = false
+    @StateObject private var dictation = Dictation()
+    @State private var pressStart: Date? = nil
+    @State private var holdSend = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -155,6 +158,10 @@ struct BookChatView: View {
                 pick = nil
             }
         }
+        .onChange(of: dictation.text) { _, t in if dictation.listening { draft = t } }
+        .alert("Mikrofon og tale", isPresented: $dictation.denied) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Giv Tradster adgang til mikrofon og talegenkendelse under Indstillinger → Tradster.") }
         .alert("Kunne ikke svare", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
@@ -280,6 +287,7 @@ struct BookChatView: View {
                         .padding(.horizontal, 12).frame(height: 38).background(Theme.surface2, in: Capsule())
                     }
                     Spacer()
+                    micButton
                     Button {
                         let t = draft, p = photo; draft = ""; photo = nil
                         Task { await model.send(t, image: p) }
@@ -298,6 +306,54 @@ struct BookChatView: View {
             .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
         }
         .background(Theme.bg)
+    }
+}
+
+extension BookChatView {
+    /// Hold to talk: press, speak, release and it sends. A short tap starts dictation into the
+    /// field instead, so you can read it over; tap again to stop.
+    var micButton: some View {
+        ZStack {
+            if dictation.listening { Waveform(level: dictation.level) } else {
+                Image(systemName: "mic").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
+            }
+        }
+        .frame(width: 38, height: 38)
+        .background(dictation.listening ? Theme.accent : Theme.surface2, in: Circle())
+        .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 60, perform: {}, onPressingChanged: { pressing in
+            if pressing {
+                pressStart = Date()
+                if dictation.listening { return }          // a tap while dictating: handled on release
+                holdSend = false
+                focused = false
+                Task { await dictation.start() }
+            } else {
+                let held = Date().timeIntervalSince(pressStart ?? Date()) >= 0.35
+                pressStart = nil
+                if held {
+                    let t = dictation.stop(); draft = ""
+                    if !t.isEmpty { let p = photo; photo = nil; Task { await model.send(t, image: p) } }
+                } else if holdSend == false, dictation.listening, draft.isEmpty == false, Date().timeIntervalSince(dictation.startedAt) > 0.6 {
+                    draft = dictation.stop()                 // second tap: stop, keep the text to edit
+                } else {
+                    holdSend = false                         // first tap: keep listening
+                }
+            }
+        })
+        .accessibilityLabel("Tal")
+    }
+}
+
+struct Waveform: View {
+    let level: CGFloat
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<4, id: \.self) { i in
+                Capsule().fill(Theme.bg)
+                    .frame(width: 3, height: 6 + 16 * max(0.15, min(1, level * (i == 1 || i == 2 ? 1.0 : 0.6))))
+            }
+        }
+        .animation(.easeOut(duration: 0.08), value: level)
     }
 }
 

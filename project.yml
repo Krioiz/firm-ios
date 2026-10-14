@@ -102,6 +102,8 @@ targets:
         UIRequiresFullScreen: true
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
         ITSAppUsesNonExemptEncryption: false
+        NSMicrophoneUsageDescription: Hold mikrofonen inde og tal til bogen.
+        NSSpeechRecognitionUsageDescription: Det du siger bliver til tekst, som sendes til bogen.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.tradster
