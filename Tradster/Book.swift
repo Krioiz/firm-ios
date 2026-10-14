@@ -30,7 +30,7 @@ struct ServerMsg: Codable, Identifiable, Hashable {
     let cards: [BookCard]?; let image: String?
 }
 struct ConvRow: Codable, Identifiable, Hashable {
-    let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?
+    let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?; let brief: Bool?
 }
 struct ConvList: Codable { let conversations: [ConvRow]? }
 struct ConvDoc: Codable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
@@ -140,35 +140,46 @@ struct BookChatView: View {
     @State private var holdSend = false
     @FocusState private var focused: Bool
 
-    private let drawerWidth: CGFloat = 300
+    private let drawerWidth: CGFloat = UIScreen.main.bounds.width - 72
+    @State private var drag: CGFloat = 0                     // live, while the finger is down
+    private var pageOffset: CGFloat { min(drawerWidth, max(0, (showHistory ? drawerWidth : 0) + drag)) }
+    private var openAmount: CGFloat { drawerWidth > 0 ? pageOffset / drawerWidth : 0 }
 
     var body: some View {
         ZStack(alignment: .leading) {
+            // The drawer is the floor; the page is a card lying on it that slides aside.
             Theme.bg.ignoresSafeArea()
-            // The page itself slides to the right when the drawer opens, so the two are one surface.
+            HistoryView(model: model, onClose: { setDrawer(false) }, onBook: { setDrawer(false); showBook = true }, onAgents: { setDrawer(false); showAgents = true })
+                .frame(width: drawerWidth)
+                .opacity(Double(0.35 + 0.65 * openAmount))
             VStack(spacing: 0) {
                 topBar
                 if model.messages.isEmpty { emptyState } else { thread }
                 composer
             }
-            .offset(x: showHistory ? drawerWidth : 0)
+            .background(Theme.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous))
+            .shadow(color: .black.opacity(0.5 * openAmount), radius: 24, x: -8, y: 0)
             .overlay {
-                if showHistory {
-                    Color.black.opacity(0.4).ignoresSafeArea()
-                        .onTapGesture { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-                        .offset(x: drawerWidth)
+                if pageOffset > 0 {
+                    Color.black.opacity(0.25 * openAmount)
+                        .onTapGesture { setDrawer(false) }
                 }
             }
-            .gesture(DragGesture(minimumDistance: 24).onEnded { g in
-                if !showHistory && g.startLocation.x < 36 && g.translation.width > 70 { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
-                if showHistory && g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-            })
-            HistoryView(model: model) { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
-                .frame(width: drawerWidth)
-                .background(Theme.surface.ignoresSafeArea())
-                .offset(x: showHistory ? 0 : -drawerWidth)
-                .gesture(DragGesture(minimumDistance: 24).onEnded { g in
-                    if g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+            .offset(x: pageOffset)
+            .ignoresSafeArea(edges: openAmount > 0 ? .vertical : [])
+            .gesture(DragGesture(minimumDistance: 12)
+                .onChanged { g in
+                    if !showHistory { if g.startLocation.x < 44 { drag = max(0, g.translation.width) } }
+                    else { drag = min(0, g.translation.width) }
+                }
+                .onEnded { g in
+                    let predicted = g.predictedEndTranslation.width
+                    withAnimation(.spring(duration: 0.3)) {
+                        if !showHistory { showHistory = g.startLocation.x < 44 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.6) }
+                        else { showHistory = !(drag < -drawerWidth * 0.25 || predicted < -drawerWidth * 0.6) }
+                        drag = 0
+                    }
                 })
         }
         .animation(.spring(duration: 0.3), value: showHistory)
@@ -196,6 +207,8 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
+    private func setDrawer(_ open: Bool) { withAnimation(.spring(duration: 0.3)) { showHistory = open; drag = 0 } }
+
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
@@ -205,7 +218,7 @@ struct BookChatView: View {
 
     private var topBar: some View {
         HStack {
-            roundButton("line.3.horizontal") { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
+            roundButton("line.3.horizontal") { setDrawer(true) }
             Spacer()
             if !model.messages.isEmpty {
                 Text(model.roomLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.secondary)
@@ -459,11 +472,21 @@ struct Waveform: View {
 // ---- history drawer -----------------------------------------------------------------------
 struct HistoryView: View {
     @ObservedObject var model: BookChatModel
-    let close: () -> Void
+    let onClose: () -> Void
+    let onBook: () -> Void
+    let onAgents: () -> Void
+    @State private var query = ""
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
+
+    private var rows: [ConvRow] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return q.isEmpty ? model.conversations : model.conversations.filter { ($0.title ?? "").lowercased().contains(q) || ($0.last ?? "").lowercased().contains(q) }
+    }
     private var groups: [(String, [ConvRow])] {
         let cal = Calendar.current
         var today: [ConvRow] = [], week: [ConvRow] = [], older: [ConvRow] = []
-        for c in model.conversations {
+        for c in rows {
             let d = ISO8601DateFormatter.withFraction.date(from: c.updated ?? "") ?? ISO8601DateFormatter().date(from: c.updated ?? "") ?? .distantPast
             if cal.isDateInToday(d) { today.append(c) }
             else if d > Date().addingTimeInterval(-7 * 86400) { week.append(c) }
@@ -471,57 +494,91 @@ struct HistoryView: View {
         }
         return [("I dag", today), ("Sidste 7 dage", week), ("Ældre", older)].filter { !$0.1.isEmpty }
     }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Image("Logo").resizable().scaledToFit().frame(width: 22, height: 22)
-                Text("Tradster").font(.system(size: 17, weight: .semibold, design: .serif)).foregroundStyle(Theme.text)
-                Spacer()
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.secondary)
-                        .frame(width: 32, height: 32).background(Theme.surface2, in: Circle())
-                }
-            }
-            .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
-            Button { model.newChat(); close() } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "square.and.pencil").font(.system(size: 15, weight: .medium))
-                    Text("Ny samtale").font(.system(size: 15, weight: .medium))
-                }
-                .foregroundStyle(Theme.text).padding(.horizontal, 12).padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }.padding(.horizontal, 12).padding(.bottom, 6)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(groups, id: \.0) { title, rows in
-                        Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.secondary)
-                            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 6)
-                        ForEach(rows) { c in
-                            Button { Task { await model.open(c.id); close() } } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(c.title ?? "Samtale").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.text).lineLimit(1)
-                                    HStack(spacing: 6) {
-                                        Text((c.agents ?? []).isEmpty ? "Koda" : (c.agents ?? []).map { id in model.agents.first { $0.id == id }?.name ?? id }.joined(separator: ", "))
-                                        Text("·"); Text(Tradster.when(c.updated))
-                                    }.font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
-                                }
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(c.id == model.conversationId ? Theme.surface2 : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
-                            .padding(.horizontal, 6)
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    if searching {
+                        TextField("", text: $query, prompt: Text("Søg i samtaler").foregroundStyle(Theme.secondary))
+                            .focused($searchFocused).font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
+                            .padding(.horizontal, 14).frame(height: 44).background(Theme.surface, in: Capsule())
+                        Button { searching = false; query = "" } label: {
+                            Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                                .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
+                        }
+                    } else {
+                        Text("Tradster").font(.system(size: 30, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
+                        Spacer()
+                        Button { searching = true; searchFocused = true } label: {
+                            Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
+                                .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
                         }
                     }
-                    if model.conversations.isEmpty {
-                        Text("Ingen samtaler endnu").font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(16)
+                }
+                .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 14)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        navRow("book.closed", "Bogen lige nu", onBook)
+                        navRow("person.2", "Hvem svarer?", onAgents)
+                        navRow("sunrise", "Morgenbriefer") { query = "Morgenbrief"; searching = true }
+                        ForEach(groups, id: \.0) { title, list in
+                            Text(title).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 6)
+                            ForEach(list) { c in
+                                Button { Task { await model.open(c.id); onClose() } } label: {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: c.brief == true ? "sunrise" : ((c.agents ?? []).isEmpty ? "bubble.left" : "person.2"))
+                                            .font(.system(size: 17)).foregroundStyle(Theme.secondary).frame(width: 24)
+                                        Text(c.title ?? "Samtale").font(.system(size: 18)).foregroundStyle(Theme.text).lineLimit(1)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 20).padding(.vertical, 13)
+                                    .background(c.id == model.conversationId ? Theme.surface : Color.clear)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
+                            }
+                        }
+                        if rows.isEmpty {
+                            Text(query.isEmpty ? "Ingen samtaler endnu" : "Intet fundet").font(.system(size: 15)).foregroundStyle(Theme.secondary).padding(20)
+                        }
+                        Color.clear.frame(height: 110)
                     }
-                }.padding(.bottom, 24)
+                }
+                .scrollDismissesKeyboard(.interactively)
             }
+            // Bottom: who you are, and the one button that matters.
+            HStack {
+                Circle().fill(Theme.surface2).frame(width: 46, height: 46)
+                    .overlay(Text("M").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text))
+                Spacer()
+                Button { model.newChat(); onClose() } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
+                        Text("Ny samtale").font(.system(size: 17, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.bg).padding(.horizontal, 22).frame(height: 50)
+                    .background(Theme.text, in: Capsule())
+                }
+                Spacer()
+                Color.clear.frame(width: 46, height: 46)
+            }
+            .padding(.horizontal, 22).padding(.bottom, 14)
         }
         .task { await model.refreshList() }
+    }
+
+    private func navRow(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: icon).font(.system(size: 19)).foregroundStyle(Theme.text).frame(width: 24)
+                Text(title).font(.system(size: 19)).foregroundStyle(Theme.text)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 14)
+        }.buttonStyle(.plain)
     }
 }
 
