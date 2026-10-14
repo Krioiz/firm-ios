@@ -520,11 +520,12 @@ struct BookChatView: View {
                 .onChanged { g in
                     let dx = g.translation.width, dy = g.translation.height
                     guard abs(dx) > abs(dy) * 1.5 else { return }                 // a vertical swipe is a scroll
-                    if drawer.drag == 0 { Keyboard.hide() }                        // once, as the drag starts
+                    if !drawer.blurred { drawer.blurred = true; Keyboard.hide() }  // once per swipe, not per frame
                     if !drawer.open { if g.startLocation.x < 60 { drawer.drag = max(0, dx) } }
                     else { drawer.drag = min(0, dx) }
                 }
                 .onEnded { g in
+                    drawer.blurred = false
                     let predicted = g.predictedEndTranslation.width, w = drawer.width, drag = drawer.drag
                     let open: Bool
                     if !drawer.open { open = g.startLocation.x < 60 && (drag > w * 0.3 || predicted > w * 0.5) }
@@ -970,6 +971,7 @@ enum Keyboard {
     @Published var open = false
     @Published var drag: CGFloat = 0                      // live, while the finger is down
     let width: CGFloat = UIScreen.main.bounds.width - 72
+    var blurred = false                                   // the keyboard was put away for this swipe
     var offset: CGFloat { min(width, max(0, (open ? width : 0) + drag)) }
     var amount: CGFloat { width > 0 ? offset / width : 0 }
 }
