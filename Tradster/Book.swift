@@ -77,7 +77,7 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
 
     var openCards: [BookCard] { (today?.cards ?? []).filter { $0.status == "open" } }
     var roomLabel: String {
-        if selected.isEmpty { return "Bogen" }
+        if selected.isEmpty { return "Koda" }
         let names = agents.filter { selected.contains($0.id) }.map { $0.name ?? $0.id }
         return names.count > 2 ? "\(names[0]), \(names[1]) +\(names.count - 2)" : names.joined(separator: ", ")
     }
@@ -151,7 +151,10 @@ struct BookChatView: View {
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
-        .sheet(isPresented: $showHistory) { HistoryView(model: model) }
+        .overlay { drawer }
+        .gesture(DragGesture(minimumDistance: 24).onEnded { g in
+            if g.startLocation.x < 36 && g.translation.width > 70 { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
+        })
         .sheet(isPresented: $showBook) { BookSheet(model: model) }
         .onChange(of: pick) { _, item in
             guard let item else { return }
@@ -169,6 +172,24 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
+    /// The history slides in from the left over the chat, like a drawer, and goes back the same way.
+    @ViewBuilder private var drawer: some View {
+        if showHistory {
+            ZStack(alignment: .leading) {
+                Color.black.opacity(0.55).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                    .transition(.opacity)
+                HistoryView(model: model) { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                    .frame(width: 304)
+                    .background(Theme.surface.ignoresSafeArea())
+                    .transition(.move(edge: .leading))
+                    .gesture(DragGesture(minimumDistance: 24).onEnded { g in
+                        if g.translation.width < -60 { withAnimation(.spring(duration: 0.3)) { showHistory = false } }
+                    })
+            }
+        }
+    }
+
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
@@ -178,7 +199,7 @@ struct BookChatView: View {
 
     private var topBar: some View {
         HStack {
-            roundButton("line.3.horizontal") { showHistory = true }
+            roundButton("line.3.horizontal") { withAnimation(.spring(duration: 0.3)) { showHistory = true } }
             Spacer()
             if !model.messages.isEmpty {
                 Text(model.roomLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.secondary)
@@ -225,7 +246,7 @@ struct BookChatView: View {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(model.messages) { m in BookBubble(m: m) }
                     if model.sending {
-                        Thinking(label: model.selected.isEmpty ? "Bogen tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20).id("typing")
+                        Thinking(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20).id("typing")
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(.vertical, 14)
@@ -251,7 +272,7 @@ struct BookChatView: View {
                         }.offset(x: 6, y: -6)
                     }.padding(.leading, 6).padding(.top, 4)
                 }
-                TextField("", text: $draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg bogen" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
+                TextField("", text: $draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg Koda" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
                     .lineLimit(1...6).focused($focused)
                     .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
                     .padding(.horizontal, 8).padding(.top, 6)
@@ -274,7 +295,7 @@ struct BookChatView: View {
                     Menu {
                         Section("I rummet") {
                             Button { model.selected = [] } label: {
-                                Label("Bogen (firmaets model)", systemImage: model.selected.isEmpty ? "checkmark" : "")
+                                Label("Koda (firmaets model)", systemImage: model.selected.isEmpty ? "checkmark" : "")
                             }
                         }
                         Section("Agenter — vælg én eller flere") {
@@ -426,7 +447,7 @@ struct Waveform: View {
 // ---- history drawer -----------------------------------------------------------------------
 struct HistoryView: View {
     @ObservedObject var model: BookChatModel
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     private var groups: [(String, [ConvRow])] {
         let cal = Calendar.current
         var today: [ConvRow] = [], week: [ConvRow] = [], older: [ConvRow] = []
@@ -439,41 +460,56 @@ struct HistoryView: View {
         return [("I dag", today), ("Sidste 7 dage", week), ("Ældre", older)].filter { !$0.1.isEmpty }
     }
     var body: some View {
-        NavigationStack {
-            List {
-                Button {
-                    model.newChat(); dismiss()
-                } label: {
-                    Label("Ny samtale", systemImage: "square.and.pencil").foregroundStyle(Theme.text)
-                }.listRowBackground(Theme.surface)
-                ForEach(groups, id: \.0) { title, rows in
-                    Section(title) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image("Logo").resizable().scaledToFit().frame(width: 22, height: 22)
+                Text("Tradster").font(.system(size: 17, weight: .semibold, design: .serif)).foregroundStyle(Theme.text)
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.secondary)
+                        .frame(width: 32, height: 32).background(Theme.surface2, in: Circle())
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
+            Button { model.newChat(); close() } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.pencil").font(.system(size: 15, weight: .medium))
+                    Text("Ny samtale").font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(Theme.text).padding(.horizontal, 12).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }.padding(.horizontal, 12).padding(.bottom, 6)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(groups, id: \.0) { title, rows in
+                        Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.secondary)
+                            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 6)
                         ForEach(rows) { c in
-                            Button {
-                                Task { await model.open(c.id); dismiss() }
-                            } label: {
+                            Button { Task { await model.open(c.id); close() } } label: {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(c.title ?? "Samtale").font(.system(size: 16, weight: .medium)).foregroundStyle(Theme.text).lineLimit(1)
+                                    Text(c.title ?? "Samtale").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.text).lineLimit(1)
                                     HStack(spacing: 6) {
-                                        Text((c.agents ?? []).isEmpty ? "Bogen" : (c.agents ?? []).map { id in model.agents.first { $0.id == id }?.name ?? id }.joined(separator: ", "))
+                                        Text((c.agents ?? []).isEmpty ? "Koda" : (c.agents ?? []).map { id in model.agents.first { $0.id == id }?.name ?? id }.joined(separator: ", "))
                                         Text("·"); Text(Tradster.when(c.updated))
                                     }.font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
                                 }
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(c.id == model.conversationId ? Theme.surface2 : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            .listRowBackground(c.id == model.conversationId ? Theme.surface2 : Theme.surface)
-                            .swipeActions { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
+                            .buttonStyle(.plain)
+                            .contextMenu { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
+                            .padding(.horizontal, 6)
                         }
                     }
-                }
+                    if model.conversations.isEmpty {
+                        Text("Ingen samtaler endnu").font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(16)
+                    }
+                }.padding(.bottom, 24)
             }
-            .scrollContentBackground(.hidden)
-            .background(Theme.bg)
-            .navigationTitle("Samtaler").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } }
-            .overlay { if model.conversations.isEmpty { Text("Ingen samtaler endnu").foregroundStyle(Theme.secondary) } }
-            .task { await model.refreshList() }
         }
-        .preferredColorScheme(.dark)
+        .task { await model.refreshList() }
     }
 }
 
@@ -526,17 +562,15 @@ struct BookBubble: View {
                 }
             }.padding(.horizontal, 16)
         } else {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 10) {
-                    if m.agent == nil { Image("Logo").resizable().scaledToFit().frame(width: 18, height: 18).padding(.top, 3) }
-                    else { Image(systemName: "person.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5) }
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let f = m.from, f != "Bogen" { Text(f).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary) }
-                        Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
-                    }
+            // Plain text, full width, no mark in front of it: the answer is the thing. An agent's
+            // reply carries its name above, so a room with several voices stays readable.
+            VStack(alignment: .leading, spacing: 10) {
+                if let f = m.from, m.agent != nil {
+                    Text(f.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.accent)
                 }
+                Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4).textSelection(.enabled)
                 if let cs = m.cards, !cs.isEmpty {
-                    VStack(spacing: 8) { ForEach(cs) { CoinCard(c: $0) } }.padding(.leading, 22)
+                    VStack(spacing: 8) { ForEach(cs) { CoinCard(c: $0) } }.padding(.top, 2)
                 }
             }.padding(.horizontal, 20)
         }
