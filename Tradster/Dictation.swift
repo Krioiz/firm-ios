@@ -9,8 +9,14 @@ import AVFoundation
 @MainActor final class Dictation: ObservableObject {
     @Published var text = ""
     @Published var listening = false
-    @Published var level: CGFloat = 0          // 0...1, for the waveform
-    @Published var history: [CGFloat] = Array(repeating: 0, count: 44)   // the last few seconds, newest last
+    /// The loudness, ~47 times a second while listening. Its own object, watched only by the two
+    /// waveforms: as @Published here it re-rendered the whole composer (and once the whole screen)
+    /// at the audio buffer rate.
+    @MainActor final class Meter: ObservableObject {
+        @Published var level: CGFloat = 0          // 0...1, for the waveform
+        @Published var history: [CGFloat] = Array(repeating: 0, count: 44)   // the last few seconds, newest last
+    }
+    let meter = Meter()
     @Published var denied = false
     private(set) var startedAt = Date()
 
@@ -53,8 +59,9 @@ import AVFoundation
             let lv = CGFloat(min(1, rms * 12))
             Task { @MainActor in
                 guard let self else { return }
-                self.level = lv
-                self.history.removeFirst(); self.history.append(lv)
+                self.meter.level = lv
+                var h = self.meter.history; h.removeFirst(); h.append(lv)
+                self.meter.history = h
             }
         }
         engine.prepare()
@@ -83,7 +90,7 @@ import AVFoundation
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         task?.cancel(); task = nil; request = nil
-        listening = false; level = 0; history = Array(repeating: 0, count: 44)
+        listening = false; meter.level = 0; meter.history = Array(repeating: 0, count: 44)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

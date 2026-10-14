@@ -373,18 +373,12 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
 // ---- the one screen ---------------------------------------------------------------------
 struct BookChatView: View {
     @StateObject private var model = BookChatModel()
-    @State private var draft = ""
-    @State private var pick: PhotosPickerItem? = nil
-    @State private var photo: UIImage? = nil
     @State private var showBook = false
     @State private var showAgents = false
     @State private var showSettings = false
     @Environment(\.scenePhase) private var phase
-    @StateObject private var dictation = Dictation()
-    @State private var pressStart: Date? = nil
-    @State private var holdSend = false
-    @FocusState private var focused: Bool
-    @State private var awayFromBottom = false              // scrolled up in a long thread
+    // Not observed here either: the screen does not re-render as you type.
+    @State private var box = ComposerBox()
 
     // Held in @State, not @StateObject: this view must not re-render when the drawer moves. Only
     // the two small modifiers below watch it.
@@ -399,8 +393,8 @@ struct BookChatView: View {
                 .modifier(DrawerFloor(d: drawer))
             VStack(spacing: 0) {
                 topBar
-                if model.messages.isEmpty { emptyState } else { thread }
-                composer
+                if model.messages.isEmpty { emptyState } else { ThreadView(model: model, box: box) }
+                ComposerView(model: model, box: box, showAgents: { showAgents = true })
             }
             .modifier(DrawerPage(d: drawer, close: { setDrawer(false) }))
         }
@@ -410,7 +404,7 @@ struct BookChatView: View {
                 .onChanged { g in
                     let dx = g.translation.width, dy = g.translation.height
                     guard abs(dx) > abs(dy) * 1.5 else { return }                 // a vertical swipe is a scroll
-                    if focused { focused = false }
+                    if drawer.drag == 0 { Keyboard.hide() }                        // once, as the drag starts
                     if !drawer.open { if g.startLocation.x < 60 { drawer.drag = max(0, dx) } }
                     else { drawer.drag = min(0, dx) }
                 }
@@ -427,7 +421,7 @@ struct BookChatView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
         .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
-            if let q = n.userInfo?["q"] as? String { if model.sending { draft = q } else { model.send(q) } }
+            if let q = n.userInfo?["q"] as? String { if model.sending { box.draft = q } else { model.send(q) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
@@ -436,22 +430,11 @@ struct BookChatView: View {
         .sheet(isPresented: $showAgents) { AgentsSheet(model: model) }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
         .onChange(of: phase) { _, p in if p == .active { Task { await model.resume(); await model.refreshToday() } } }
-        .onChange(of: pick) { _, item in
-            guard let item else { return }
-            Task {
-                if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) { photo = img }
-                pick = nil
-            }
-        }
-        .onChange(of: dictation.text) { _, t in if dictation.listening { draft = t } }
-        .alert("Mikrofon og tale", isPresented: $dictation.denied) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Giv Tradster adgang til mikrofon og talegenkendelse under Indstillinger → Tradster.") }
     }
 
     private func setDrawer(_ open: Bool) {
         Haptic.soft()
-        if open { focused = false; Task { await model.refreshList() } }
+        if open { Keyboard.hide(); Task { await model.refreshList() } }
         withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { drawer.open = open; drawer.drag = 0 }
     }
 
@@ -472,7 +455,7 @@ struct BookChatView: View {
                 Spacer()
             }
             roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil", model.messages.isEmpty ? "Bogen lige nu" : "Ny samtale") {
-                focused = false; if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
+                Keyboard.hide(); if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
             }
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 4)
@@ -560,10 +543,18 @@ struct BookChatView: View {
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .onTapGesture { focused = false }
+        .onTapGesture { Keyboard.hide() }
     }
+}
 
-    private var thread: some View {
+/// The conversation. Its own view, so a keystroke in the composer or the voice meter does not
+/// re-render it; finished bubbles are Equatable, so a new message only builds the new one.
+struct ThreadView: View {
+    @ObservedObject var model: BookChatModel
+    let box: ComposerBox
+    @State private var awayFromBottom = false              // scrolled up in a long thread
+
+    var body: some View {
         GeometryReader { geo in
             ScrollViewReader { proxy in
                 ScrollView {
@@ -571,8 +562,8 @@ struct BookChatView: View {
                         let qs = Self.questions(model.messages)
                         ForEach(Array(model.messages.enumerated()), id: \.element.id) { i, m in
                             BookBubble(m: m, question: qs[i], busy: model.sending,
-                                       ask: { q in focused = false; model.send(q) },
-                                       edit: { t in draft = t; focused = true })
+                                       ask: { q in Keyboard.hide(); model.send(q) },
+                                       edit: { t in box.edit(t) })
                                 .equatable()
                                 .id(m.id)
                         }
@@ -585,7 +576,7 @@ struct BookChatView: View {
                     }.padding(.vertical, 14)
                 }
                 .scrollDismissesKeyboard(.immediately)
-                .onTapGesture { focused = false }
+                .onTapGesture { Keyboard.hide() }
                 // Far up in a long thread: one small arrow back to the end, nothing else.
                 .onScrollGeometryChange(for: Bool.self) { g in
                     g.contentSize.height - (g.contentOffset.y + g.containerSize.height) > 400
@@ -636,8 +627,23 @@ struct BookChatView: View {
         }
         return out
     }
+}
 
-    private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
+/// The composer owns the photo and the dictation, and watches the draft, so a keystroke or the
+/// voice meter re-renders this card and nothing above it. It used to be part of the screen's own
+/// body: every letter typed rebuilt the whole thread.
+struct ComposerView: View {
+    @ObservedObject var model: BookChatModel
+    @ObservedObject var box: ComposerBox
+    let showAgents: () -> Void
+    @StateObject private var dictation = Dictation()
+    @State private var pick: PhotosPickerItem? = nil
+    @State private var photo: UIImage? = nil
+    @State private var pressStart: Date? = nil
+    @State private var holdSend = false
+    @FocusState private var focused: Bool
+
+    private var canSend: Bool { (!box.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
 
     /// Network trouble, said once and quietly above the composer, with a way to try again.
     private func quietLine(_ q: String) -> some View {
@@ -656,7 +662,7 @@ struct BookChatView: View {
         .transition(.opacity)
     }
 
-    private var composer: some View {
+    var body: some View {
         VStack(spacing: 0) {
             if let q = model.quiet { quietLine(q) }
             VStack(alignment: .leading, spacing: 8) {
@@ -669,7 +675,7 @@ struct BookChatView: View {
                         }.offset(x: 6, y: -6).accessibilityLabel("Fjern billedet")
                     }.padding(.leading, 6).padding(.top, 4)
                 }
-                TextField("", text: $draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg Koda" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
+                TextField("", text: $box.draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg Koda" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
                     .lineLimit(1...6).focused($focused)
                     .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
                     .padding(.horizontal, 8).padding(.top, 6)
@@ -690,7 +696,7 @@ struct BookChatView: View {
                         .foregroundStyle(Theme.secondary)
                         .padding(.horizontal, 12).frame(height: 38)
                     } else {
-                    Button { showAgents = true } label: {
+                    Button { showAgents() } label: {
                         HStack(spacing: 6) {
                             if model.selected.isEmpty { Image("Logo").resizable().scaledToFit().frame(width: 16, height: 16) }
                             else { Image(systemName: "person.2.fill").font(.system(size: 12, weight: .semibold)) }
@@ -704,7 +710,7 @@ struct BookChatView: View {
                     Spacer()
                     micButton
                     Button {
-                        let t = draft, p = photo; draft = ""; photo = nil
+                        let t = box.draft, p = photo; box.draft = ""; photo = nil
                         model.send(t, image: p)
                     } label: {
                         Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
@@ -724,27 +730,36 @@ struct BookChatView: View {
         }
         .background(Theme.bg)
         .animation(.easeOut(duration: 0.2), value: model.quiet)
+        .onChange(of: pick) { _, item in
+            guard let item else { return }
+            Task {
+                if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) { photo = img }
+                pick = nil
+            }
+        }
+        .onChange(of: dictation.text) { _, t in if dictation.listening { box.draft = t } }
+        .onChange(of: box.focusRequest) { _, _ in focused = true }
+        .alert("Mikrofon og tale", isPresented: $dictation.denied) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Giv Tradster adgang til mikrofon og talegenkendelse under Indstillinger → Tradster.") }
     }
-}
-
-extension BookChatView {
     /// While listening the bottom row becomes: cancel, the voice as a line that only moves
     /// when you speak, stop (keep the words to read over), send.
     var recordingRow: some View {
         HStack(spacing: 10) {
-            Button { _ = dictation.stop(); draft = "" } label: {
+            Button { _ = dictation.stop(); box.draft = "" } label: {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                     .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
             }
             .accessibilityLabel("Annullér")
-            WideWaveform(history: dictation.history).frame(height: 38).accessibilityHidden(true)
-            Button { draft = dictation.stop() } label: {
+            WideWaveform(meter: dictation.meter).frame(height: 38).accessibilityHidden(true)
+            Button { box.draft = dictation.stop() } label: {
                 Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.text)
                     .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
             }
             .accessibilityLabel("Stop og ret teksten")
             Button {
-                let t = dictation.stop(); draft = ""
+                let t = dictation.stop(); box.draft = ""
                 if !t.isEmpty { let p = photo; photo = nil; model.send(t, image: p) }
             } label: {
                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
@@ -758,7 +773,7 @@ extension BookChatView {
     /// field instead, so you can read it over; tap again to stop.
     var micButton: some View {
         ZStack {
-            if dictation.listening { Waveform(level: dictation.level) } else {
+            if dictation.listening { Waveform(meter: dictation.meter) } else {
                 Image(systemName: "mic").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
             }
         }
@@ -775,10 +790,10 @@ extension BookChatView {
                 let held = Date().timeIntervalSince(pressStart ?? Date()) >= 0.35
                 pressStart = nil
                 if held {
-                    let t = dictation.stop(); draft = ""
+                    let t = dictation.stop(); box.draft = ""
                     if !t.isEmpty { let p = photo; photo = nil; model.send(t, image: p) }
-                } else if holdSend == false, dictation.listening, draft.isEmpty == false, Date().timeIntervalSince(dictation.startedAt) > 0.6 {
-                    draft = dictation.stop()                 // second tap: stop, keep the text to edit
+                } else if holdSend == false, dictation.listening, box.draft.isEmpty == false, Date().timeIntervalSince(dictation.startedAt) > 0.6 {
+                    box.draft = dictation.stop()                 // second tap: stop, keep the text to edit
                 } else {
                     holdSend = false                         // first tap: keep listening
                 }
@@ -787,6 +802,18 @@ extension BookChatView {
         .accessibilityLabel("Tal")
         .accessibilityHint("Hold inde og tal, slip for at sende")
     }
+}
+
+/// What the composer and the screen share: the draft, and a way to ask for the keyboard.
+@MainActor final class ComposerBox: ObservableObject {
+    @Published var draft = ""
+    @Published var focusRequest = 0
+    /// "Ret og send igen": the text back in the field, keyboard up.
+    func edit(_ t: String) { draft = t; focusRequest += 1 }
+}
+
+enum Keyboard {
+    @MainActor static func hide() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
 }
 
 // ---- the drawer ------------------------------------------------------------------------
@@ -1026,7 +1053,8 @@ struct Thinking: View {
 }
 
 struct WideWaveform: View {
-    let history: [CGFloat]
+    @ObservedObject var meter: Dictation.Meter
+    private var history: [CGFloat] { meter.history }
     var body: some View {
         HStack(spacing: 2.5) {
             ForEach(Array(history.enumerated()), id: \.offset) { _, v in
@@ -1040,7 +1068,8 @@ struct WideWaveform: View {
 }
 
 struct Waveform: View {
-    let level: CGFloat
+    @ObservedObject var meter: Dictation.Meter
+    private var level: CGFloat { meter.level }
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<4, id: \.self) { i in
