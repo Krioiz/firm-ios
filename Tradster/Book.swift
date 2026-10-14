@@ -18,6 +18,8 @@ struct BookCard: Codable, Identifiable, Hashable {
     let entry: Double?; let mark: Double?; let exit: Double?; let bp: Int?; let stop: Double?; let dkk: Double?
     let opened_at: String?; let closes_at: String?; let closed_at: String?; let why: String?; let note: String?
     let today: Bool?; let series: [BookPt]?
+    let kind: String?; let last: Double?; let change_pct: Double?; let prev_close: Double?; let currency: String?; let day_start: Double?; let status_text: String?
+    var isMarket: Bool { kind == "market" }
 }
 struct BookToday: Codable { let at: String?; let headline: String?; let cards: [BookCard]? }
 struct AgentRow: Codable, Identifiable, Hashable { let id: String; let name: String?; let role: String? }
@@ -223,11 +225,7 @@ struct BookChatView: View {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(model.messages) { m in BookBubble(m: m) }
                     if model.sending {
-                        HStack(spacing: 8) {
-                            Image("Logo").resizable().scaledToFit().frame(width: 18, height: 18)
-                            TypingDots()
-                            Text(model.selected.isEmpty ? "" : "\(model.roomLabel) tænker").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                        }.padding(.horizontal, 20).id("typing")
+                        Thinking(label: model.selected.isEmpty ? "Bogen tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20).id("typing")
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(.vertical, 14)
@@ -253,7 +251,7 @@ struct BookChatView: View {
                         }.offset(x: 6, y: -6)
                     }.padding(.leading, 6).padding(.top, 4)
                 }
-                TextField("", text: $draft, prompt: Text(model.selected.isEmpty ? "Spørg bogen" : "Skriv til \(model.roomLabel)").foregroundStyle(Theme.secondary), axis: .vertical)
+                TextField("", text: $draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg bogen" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
                     .lineLimit(1...6).focused($focused)
                     .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
                     .padding(.horizontal, 8).padding(.top, 6)
@@ -263,6 +261,16 @@ struct BookChatView: View {
                         Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
                             .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
                     }
+                    if !model.messages.isEmpty {
+                        // The room is set when the conversation starts; mid-chat it is a label, not a choice.
+                        HStack(spacing: 6) {
+                            if model.selected.isEmpty { Image("Logo").resizable().scaledToFit().frame(width: 16, height: 16) }
+                            else { Image(systemName: "person.2").font(.system(size: 12, weight: .semibold)) }
+                            Text(model.roomLabel).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                        }
+                        .foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 12).frame(height: 38)
+                    } else {
                     Menu {
                         Section("I rummet") {
                             Button { model.selected = [] } label: {
@@ -287,6 +295,7 @@ struct BookChatView: View {
                         }
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 12).frame(height: 38).background(Theme.surface2, in: Capsule())
+                    }
                     }
                     Spacer()
                     micButton
@@ -367,6 +376,23 @@ extension BookChatView {
             }
         })
         .accessibilityLabel("Tal")
+    }
+}
+
+/// One line while the answer is on its way: the mark breathing, three words beside it.
+struct Thinking: View {
+    let label: String
+    @State private var on = false
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image("Logo").resizable().scaledToFit().frame(width: 22, height: 22)
+                .scaleEffect(on ? 1.08 : 0.92).opacity(on ? 1 : 0.55)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
+            Text(label).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                .opacity(on ? 1 : 0.5)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
+        }
+        .onAppear { on = true }
     }
 }
 
@@ -545,6 +571,61 @@ struct CoinCard: View {
         v >= 100 ? String(format: "%.2f", v) : v >= 1 ? String(format: "%.4f", v) : String(format: "%.6g", v)
     }
     var body: some View {
+        if c.isMarket { market } else { leg }
+    }
+
+    /// Yesterday against today: the last two sessions, a dashed line at yesterday's close, a
+    /// thin line where today began. The change is against yesterday's close.
+    private var market: some View {
+        let pct = c.change_pct ?? 0
+        let col: Color = pct >= 0 ? Theme.up : Theme.down
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Circle().fill(Theme.surface2).frame(width: 36, height: 36)
+                    .overlay(Image(systemName: "chart.xyaxis.line").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(c.name ?? c.symbol ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    Text("\(c.symbol ?? "") · i går → i dag").font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(String(format: "%@%.2f %%", pct >= 0 ? "+" : "", pct)).font(.system(size: 17, weight: .bold)).monospacedDigit().foregroundStyle(col)
+                    if let l = c.last, let pc = c.prev_close {
+                        Text("\(px(pc)) → \(px(l))").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.secondary)
+                    }
+                }
+            }
+            if let s = c.series, s.count > 2 {
+                let vals = s.map(\.c) + [c.prev_close ?? s[0].c]
+                let lo = vals.min() ?? 0, hi = vals.max() ?? 1, pad = max((hi - lo) * 0.1, 1e-9)
+                Chart {
+                    ForEach(Array(s.enumerated()), id: \.offset) { _, p in
+                        AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
+                            .foregroundStyle(LinearGradient(colors: [col.opacity(0.22), col.opacity(0.0)], startPoint: .top, endPoint: .bottom))
+                        LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("kurs", p.c))
+                            .foregroundStyle(col).lineStyle(.init(lineWidth: 2, lineCap: .round))
+                    }
+                    if let pc = c.prev_close {
+                        RuleMark(y: .value("luk i går", pc)).foregroundStyle(Theme.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                            .annotation(position: .top, alignment: .leading) { Text("luk i går \(px(pc))").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
+                    }
+                    if let d = c.day_start {
+                        RuleMark(x: .value("i dag", Date(timeIntervalSince1970: d))).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
+                            .annotation(position: .bottom, alignment: .leading) { Text("i dag").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
+                    }
+                }
+                .chartYScale(domain: (lo - pad)...(hi + pad))
+                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.hour().minute()).font(.system(size: 9)).foregroundStyle(Theme.secondary) } }
+                .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 9)).foregroundStyle(Theme.secondary) } }
+                .frame(height: 120)
+            }
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+
+    private var leg: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 CoinLogo(url: c.logo, fallback: c.logo_fallback)
