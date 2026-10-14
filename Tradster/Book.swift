@@ -369,6 +369,7 @@ struct BookChatView: View {
     @State private var pressStart: Date? = nil
     @State private var holdSend = false
     @FocusState private var focused: Bool
+    @State private var awayFromBottom = false              // scrolled up in a long thread
 
     private let drawerWidth: CGFloat = UIScreen.main.bounds.width - 72
     @State private var drag: CGFloat = 0                     // live, while the finger is down
@@ -584,6 +585,27 @@ struct BookChatView: View {
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .onTapGesture { focused = false }
+                // Far up in a long thread: one small arrow back to the end, nothing else.
+                .onScrollGeometryChange(for: Bool.self) { g in
+                    g.contentSize.height - (g.contentOffset.y + g.containerSize.height) > 400
+                } action: { _, away in awayFromBottom = away }
+                .overlay(alignment: .bottom) {
+                    if awayFromBottom && !model.sending {
+                        Button {
+                            Haptic.tap()
+                            withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        } label: {
+                            Image(systemName: "arrow.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                                .frame(width: 36, height: 36).background(Theme.surface2, in: Circle())
+                                .overlay(Circle().stroke(Theme.line, lineWidth: 1))
+                                .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+                        }
+                        .accessibilityLabel("Til bunden")
+                        .padding(.bottom, 10)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: awayFromBottom)
                 .onChange(of: model.messages.count) { old, new in
                     // Only for what you just asked and its answer; opening a conversation goes to the end.
                     guard model.sending, new > old, let last = model.messages.last else { return }
