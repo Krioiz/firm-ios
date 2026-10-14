@@ -30,7 +30,9 @@ struct ServerMsg: Codable, Identifiable, Hashable {
     let cards: [BookCard]?; let image: String?
     var sources: [SourceRow]? = nil
 }
-struct SourceRow: Codable, Hashable { let kind: String?; let name: String?; let symbol: String?; let logo: String? }
+struct SourceRow: Codable, Hashable { let kind: String?; let name: String?; let symbol: String?; let logo: String?; var url: String? = nil }
+struct StreamEvent: Codable { let type: String; let id: String?; let title: String?; let text: String?; let source: SourceRow?; let reply: ServerMsg?; let error: String? }
+struct StatusLine: Identifiable, Hashable { let id = UUID(); let text: String; let source: SourceRow? }
 enum AskKoda { static let note = Notification.Name("tradster.ask") }
 struct ConvRow: Codable, Identifiable, Hashable {
     let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?; let brief: Bool?
@@ -48,6 +50,10 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
     @Published var sending = false
     @Published var error: String? = nil
     @Published var today: BookToday? = nil
+    // live, while an answer is on its way (streaming)
+    @Published var statusLines: [StatusLine] = []
+    @Published var streamText = ""
+    var streaming: Bool { UserDefaults.standard.object(forKey: "stream") as? Bool ?? true }
 
     static let suggestions = ["Giv mig et dybdegående overblik over alt", "Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
 
@@ -111,6 +117,13 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
             try? jpeg.write(to: tmp); localImage = tmp.absoluteString
         }
         messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage, sources: nil))
+        // iOS gives a backgrounded app ~30 s; the server finishes regardless and pushes if we are gone.
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "koda") {}
+        defer { UIApplication.shared.endBackgroundTask(bg) }
+        if streaming { await stream(payload) } else { await plain(payload) }
+    }
+
+    private func plain(_ payload: [String: Any]) async {
         do {
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
             let p = try? JSONDecoder().decode(SendResult.self, from: d)
@@ -129,6 +142,50 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
         }
         sending = false
     }
+
+    /// The answer as it is written: status lines while Koda looks things up, then the text.
+    private func stream(_ payload: [String: Any]) async {
+        statusLines = []; streamText = ""
+        var got = false
+        do {
+            let (bytes, resp) = try await URLSession.shared.bytes(for: request("conversations/\(conversationId ?? "new")/stream", method: "POST", body: payload, timeout: 300))
+            if let h = resp as? HTTPURLResponse, h.statusCode == 404 { await plain(payload); return }   // server without streaming yet
+            if let h = resp as? HTTPURLResponse, h.statusCode != 200 { error = "HTTP \(h.statusCode)"; Haptic.fail() }
+            else {
+                for try await line in bytes.lines {
+                    guard line.hasPrefix("data:") else { continue }
+                    let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    guard let ev = try? JSONDecoder().decode(StreamEvent.self, from: Data(json.utf8)) else { continue }
+                    switch ev.type {
+                    case "conv": if let id = ev.id { conversationId = id }
+                    case "status": statusLines.append(StatusLine(text: ev.text ?? "", source: ev.source)); Haptic.pick()
+                    case "delta":
+                        if streamText.isEmpty { Haptic.soft() }
+                        streamText += ev.text ?? ""
+                    case "done":
+                        if let r = ev.reply { messages.append(r); got = true }
+                        streamText = ""; statusLines = []
+                    case "error": error = ev.error ?? "Fejl"; Haptic.fail()
+                    default: break
+                    }
+                }
+            }
+        } catch {
+            if !got { self.error = error.localizedDescription }
+        }
+        if got { Haptic.done() }
+        statusLines = []; streamText = ""
+        sending = false
+        await refreshList()
+    }
+
+    /// Back from the background: pick up an answer that finished while we were away.
+    func resume() async {
+        guard let id = conversationId, !sending else { return }
+        if let doc = await fetch("conversations/\(id)", ConvDoc.self), (doc.messages?.count ?? 0) > messages.count {
+            messages = doc.messages ?? []
+        }
+    }
 }
 
 // ---- the one screen ---------------------------------------------------------------------
@@ -140,6 +197,8 @@ struct BookChatView: View {
     @State private var showHistory = false
     @State private var showBook = false
     @State private var showAgents = false
+    @State private var showSettings = false
+    @Environment(\.scenePhase) private var phase
     @StateObject private var dictation = Dictation()
     @State private var pressStart: Date? = nil
     @State private var holdSend = false
@@ -154,7 +213,7 @@ struct BookChatView: View {
         ZStack(alignment: .leading) {
             // The drawer is the floor; the page is a card lying on it that slides aside.
             Theme.bg.ignoresSafeArea()
-            HistoryView(model: model, onClose: { setDrawer(false) }, onBook: { setDrawer(false); showBook = true }, onAgents: { setDrawer(false); showAgents = true })
+            HistoryView(model: model, onClose: { setDrawer(false) }, onBook: { setDrawer(false); showBook = true }, onAgents: { setDrawer(false); showAgents = true }, onSettings: { setDrawer(false); showSettings = true })
                 .frame(width: drawerWidth)
                 .opacity(Double(0.35 + 0.65 * openAmount))
             VStack(spacing: 0) {
@@ -203,6 +262,8 @@ struct BookChatView: View {
         }
         .sheet(isPresented: $showBook) { BookSheet(model: model) }
         .sheet(isPresented: $showAgents) { AgentsSheet(model: model) }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
+        .onChange(of: phase) { _, p in if p == .active { Task { await model.resume() } } }
         .onChange(of: pick) { _, item in
             guard let item else { return }
             Task {
@@ -299,7 +360,8 @@ struct BookChatView: View {
                     LazyVStack(alignment: .leading, spacing: 22) {
                         ForEach(model.messages) { m in BookBubble(m: m).id(m.id) }
                         if model.sending {
-                            Thinking(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20)
+                            LiveAnswer(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker",
+                                       lines: model.statusLines, text: model.streamText).padding(.horizontal, 20)
                         }
                         // Room under the last question, so it can sit at the top while the answer arrives.
                         Color.clear.frame(height: model.sending ? geo.size.height * 0.75 : 1).id("bottom")
@@ -448,6 +510,78 @@ extension BookChatView {
     }
 }
 
+/// While Koda works: what it is looking at, line by line with the source's logo, then the text
+/// as it is written. Before anything has come back, the breathing mark.
+struct LiveAnswer: View {
+    let label: String; let lines: [StatusLine]; let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(lines.enumerated()), id: \.element.id) { i, l in
+                HStack(spacing: 8) {
+                    if let lg = l.source?.logo, let u = URL(string: lg) {
+                        AsyncImage(url: u) { ph in if case .success(let im) = ph { im.resizable().scaledToFit() } else { Circle().fill(Theme.surface2) } }
+                            .frame(width: 16, height: 16).clipShape(Circle())
+                    } else {
+                        Image(systemName: i == lines.count - 1 && text.isEmpty ? "magnifyingglass" : "checkmark")
+                            .font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.secondary).frame(width: 16, height: 16)
+                    }
+                    Text(l.text).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                        .opacity(i == lines.count - 1 && text.isEmpty ? 1 : 0.6)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            if text.isEmpty { Thinking(label: lines.isEmpty ? label : "") }
+            else { Text(text).font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4) }
+        }
+        .animation(.easeOut(duration: 0.2), value: lines.count)
+    }
+}
+
+/// Settings: one switch and what Koda remembers about you.
+struct SettingsSheet: View {
+    @AppStorage("stream") private var stream = true
+    @State private var facts: [String] = []
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Toggle(isOn: $stream) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Svar skriver sig frem").foregroundStyle(Theme.text)
+                            Text("Teksten kommer mens Koda skriver, og du ser hvad den slår op.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        }
+                    }.tint(Theme.accent)
+                }.listRowBackground(Theme.surface)
+                Section("Hvad Koda husker om dig") {
+                    if facts.isEmpty { Text("Intet endnu").foregroundStyle(Theme.secondary) }
+                    ForEach(Array(facts.enumerated()), id: \.offset) { i, f in
+                        Text(f).foregroundStyle(Theme.text)
+                            .swipeActions { Button(role: .destructive) { Task { await forget(i) } } label: { Label("Glem", systemImage: "trash") } }
+                    }
+                }.listRowBackground(Theme.surface)
+            }
+            .scrollContentBackground(.hidden).background(Theme.bg)
+            .navigationTitle("Indstillinger").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Færdig") { dismiss() }.foregroundStyle(Theme.accent) } }
+            .task { await load() }
+        }
+        .preferredColorScheme(.dark)
+    }
+    /// The server's shape is read loosely: a list of strings, or of objects with a text field.
+    private func load() async {
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/memory")!); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        guard let (d, _) = try? await URLSession.shared.data(for: r), let j = try? JSONSerialization.jsonObject(with: d) else { return }
+        var arr: [Any] = []
+        if let a = j as? [Any] { arr = a } else if let o = j as? [String: Any] { arr = (o["facts"] ?? o["memory"] ?? o["items"]) as? [Any] ?? [] }
+        facts = arr.compactMap { x in (x as? String) ?? ((x as? [String: Any])?["text"] as? String) ?? ((x as? [String: Any])?["fact"] as? String) }
+    }
+    private func forget(_ i: Int) async {
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/memory/\(i)")!); r.httpMethod = "DELETE"; r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        _ = try? await URLSession.shared.data(for: r); Haptic.pick(); await load()
+    }
+}
+
 /// One line while the answer is on its way: the mark breathing, three words beside it.
 struct Thinking: View {
     let label: String
@@ -457,7 +591,7 @@ struct Thinking: View {
             Image("Logo").resizable().scaledToFit().frame(width: 22, height: 22)
                 .scaleEffect(on ? 1.08 : 0.92).opacity(on ? 1 : 0.55)
                 .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
-            Text(label).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+            if !label.isEmpty { Text(label).font(.system(size: 15)).foregroundStyle(Theme.secondary) }
                 .opacity(on ? 1 : 0.5)
                 .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
         }
@@ -498,6 +632,7 @@ struct HistoryView: View {
     let onClose: () -> Void
     let onBook: () -> Void
     let onAgents: () -> Void
+    let onSettings: () -> Void
     @State private var query = ""
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -574,8 +709,10 @@ struct HistoryView: View {
             }
             // Bottom: who you are, and the one button that matters.
             HStack {
-                Circle().fill(Theme.surface2).frame(width: 46, height: 46)
-                    .overlay(Text("M").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text))
+                Button(action: onSettings) {
+                    Circle().fill(Theme.surface2).frame(width: 46, height: 46)
+                        .overlay(Text("M").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text))
+                }
                 Spacer()
                 Button { model.newChat(); onClose() } label: {
                     HStack(spacing: 8) {
@@ -798,6 +935,15 @@ struct Sources: View {
             HStack(spacing: 6) {
                 Text("Kilder").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary).padding(.trailing, 2)
                 ForEach(items, id: \.self) { src in
+                    chip(src)
+                }
+            }
+        }
+    }
+    @ViewBuilder private func chip(_ src: SourceRow) -> some View {
+        if let u = src.url, let url = URL(string: u) { Link(destination: url) { pill(src) } } else { pill(src) }
+    }
+    private func pill(_ src: SourceRow) -> some View {
                     HStack(spacing: 5) {
                         if let l = src.logo, let u = URL(string: l) {
                             AsyncImage(url: u) { ph in if case .success(let i) = ph { i.resizable().scaledToFit() } else { icon(src.kind) } }
@@ -808,12 +954,9 @@ struct Sources: View {
                     .padding(.horizontal, 9).padding(.vertical, 5)
                     .background(Theme.surface, in: Capsule())
                     .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
-                }
-            }
-        }
     }
     private func icon(_ kind: String?) -> some View {
-        Image(systemName: kind == "market" ? "chart.xyaxis.line" : kind == "ledger" ? "clock.arrow.circlepath" : "book.closed")
+        Image(systemName: kind == "market" ? "chart.xyaxis.line" : kind == "ledger" ? "clock.arrow.circlepath" : kind == "web" ? "globe" : kind == "memory" ? "brain" : "book.closed")
             .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary).frame(width: 14, height: 14)
     }
 }
