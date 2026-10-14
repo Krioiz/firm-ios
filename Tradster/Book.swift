@@ -170,10 +170,11 @@ struct BookChatView: View {
             .ignoresSafeArea(edges: openAmount > 0 ? .vertical : [])
             // The card follows the finger. From the left edge when closed, from anywhere when open;
             // high priority so the scroll views and the text field inside do not swallow it.
-            .highPriorityGesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .simultaneousGesture(DragGesture(minimumDistance: 14, coordinateSpace: .global)
                 .onChanged { g in
                     let dx = g.translation.width, dy = g.translation.height
-                    guard abs(dx) > abs(dy) else { return }                       // a vertical swipe is a scroll
+                    guard abs(dx) > abs(dy) * 1.5 else { return }                 // a vertical swipe is a scroll
+                    if focused { focused = false }
                     if !showHistory { if g.startLocation.x < 60 { drag = max(0, dx) } }
                     else { drag = min(0, dx) }
                 }
@@ -209,7 +210,7 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
-    private func setDrawer(_ open: Bool) { withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
+    private func setDrawer(_ open: Bool) { if open { focused = false }; withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
 
     private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -227,7 +228,7 @@ struct BookChatView: View {
                 Spacer()
             }
             roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil") {
-                if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
+                focused = false; if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
             }
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 4)
@@ -293,7 +294,8 @@ struct BookChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(.vertical, 14)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .onTapGesture { focused = false }
             .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             .onAppear { proxy.scrollTo("bottom") }
