@@ -21,7 +21,17 @@ struct BookCard: Codable, Identifiable, Hashable {
     let kind: String?; let last: Double?; let change_pct: Double?; let prev_close: Double?; let currency: String?; let day_start: Double?; let status_text: String?
     var isMarket: Bool { kind == "market" }
 }
-struct BookToday: Codable { let at: String?; let headline: String?; let cards: [BookCard]? }
+struct BookToday: Codable {
+    let at: String?; let headline: String?; let cards: [BookCard]?
+    var equity: [String: BookEquity?]? = nil
+    /// Both paper books together: what they are worth now, and against what they started with.
+    var total: (now: Double, start: Double)? {
+        let rows = (equity ?? [:]).values.compactMap { $0 }.filter { $0.dkk != nil && $0.start != nil }
+        guard !rows.isEmpty else { return nil }
+        return (rows.reduce(0) { $0 + ($1.dkk ?? 0) }, rows.reduce(0) { $0 + ($1.start ?? 0) })
+    }
+}
+struct BookEquity: Codable, Hashable { let dkk: Double?; let start: Double? }
 struct AgentRow: Codable, Identifiable, Hashable { let id: String; let name: String?; let role: String? }
 struct AgentsPayload: Codable { let agents: [AgentRow]? }
 struct ServerMsg: Codable, Identifiable, Hashable {
@@ -425,7 +435,7 @@ struct BookChatView: View {
         .sheet(isPresented: $showBook) { BookSheet(model: model) }
         .sheet(isPresented: $showAgents) { AgentsSheet(model: model) }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
-        .onChange(of: phase) { _, p in if p == .active { Task { await model.resume() } } }
+        .onChange(of: phase) { _, p in if p == .active { Task { await model.resume(); await model.refreshToday() } } }
         .onChange(of: pick) { _, item in
             guard let item else { return }
             Task {
@@ -477,16 +487,52 @@ struct BookChatView: View {
         }
     }
 
+    private func equityLine(_ now: Double, _ start: Double) -> some View {
+        let diff = now - start, pct = start > 0 ? diff / start * 100 : 0
+        let col = diff >= 0 ? Theme.up : Theme.down
+        return HStack(spacing: 8) {
+            Text("\(Tradster.kr(now)) kr").foregroundStyle(Theme.text)
+            Text("\(diff >= 0 ? "+" : "−")\(Tradster.kr(abs(diff))) kr · \(String(format: "%@%.1f", pct >= 0 ? "+" : "−", abs(pct)).replacingOccurrences(of: ".", with: ",")) %")
+                .foregroundStyle(col)
+            if let stale = staleTime { Text("· \(stale)").foregroundStyle(Theme.secondary) }
+        }
+        .font(.system(size: 14, weight: .medium)).monospacedDigit()
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Åbner bogen")
+    }
+    /// Only when the numbers are not fresh (from disk, or no signal): when they are from.
+    private var staleTime: String? {
+        guard let a = model.today?.at, let d = ISO8601DateFormatter.withFraction.date(from: a) ?? ISO8601DateFormatter().date(from: a),
+              Date().timeIntervalSince(d) > 15 * 60 else { return nil }
+        return Tradster.when(a)
+    }
+
+    /// Empty screen, but pull it down and the book and the list are fetched again.
     private var emptyState: some View {
+        GeometryReader { geo in
+            ScrollView {
+                greetingContent.frame(height: geo.size.height)   // the screen's height, so the spacers still place it
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable { await model.refreshToday(); await model.refreshList() }
+        }
+    }
+
+    private var greetingContent: some View {
         VStack(spacing: 0) {
             Spacer()
             Image("Logo").resizable().scaledToFit().frame(width: 96).padding(.bottom, 26)
             Text(greeting)
                 .font(.system(size: 30, weight: .regular, design: .serif))
                 .foregroundStyle(Theme.text).multilineTextAlignment(.center).padding(.horizontal, 28)
+            // The book in one line: what the paper is worth and how far from the start, then the day.
+            if let t = model.today?.total {
+                Button { Haptic.tap(); showBook = true } label: { equityLine(t.now, t.start) }
+                    .buttonStyle(.plain).padding(.top, 14)
+            }
             if let h = model.today?.headline {
                 Text(h).font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                    .multilineTextAlignment(.center).padding(.top, 14).padding(.horizontal, 40)
+                    .multilineTextAlignment(.center).padding(.top, model.today?.total == nil ? 14 : 4).padding(.horizontal, 40)
             }
             // The open legs as a row of logos; tap it for the whole book.
             if !model.openCards.isEmpty {
@@ -1559,6 +1605,11 @@ enum Theme {
 // ---- what this app needs from the rest of the firm, kept local so it builds alone -------
 enum Tradster {
     static let base = "https://getstubbie.com/dashboard"
+    /// 10.234 — Danish thousands, no decimals.
+    static func kr(_ v: Double) -> String {
+        let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal; f.maximumFractionDigits = 0
+        return f.string(from: NSNumber(value: v.rounded())) ?? String(Int(v.rounded()))
+    }
     static func when(_ s: String?) -> String {
         guard let s, let d = ISO8601DateFormatter().date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s) else { return "" }
         let f = DateFormatter(); f.locale = Locale(identifier: "da_DK")
