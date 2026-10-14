@@ -50,7 +50,7 @@ struct PairingView: View {
             Theme.bg.ignoresSafeArea()
             VStack(spacing: 18) {
                 Spacer()
-                Image(systemName: "asterisk").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.accent)
+                Image("Logo").resizable().scaledToFit().frame(width: 110)
                 Text("Tradster").font(.system(size: 34, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
                 if paired == nil {
                     ProgressView().tint(Theme.secondary)

@@ -201,7 +201,7 @@ struct BookChatView: View {
     private var emptyState: some View {
         VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "asterisk").font(.system(size: 34, weight: .semibold)).foregroundStyle(Theme.accent).padding(.bottom, 26)
+            Image("Logo").resizable().scaledToFit().frame(width: 96).padding(.bottom, 26)
             Text(greeting)
                 .font(.system(size: 30, weight: .regular, design: .serif))
                 .foregroundStyle(Theme.text).multilineTextAlignment(.center).padding(.horizontal, 28)
@@ -224,7 +224,7 @@ struct BookChatView: View {
                     ForEach(model.messages) { m in BookBubble(m: m) }
                     if model.sending {
                         HStack(spacing: 8) {
-                            Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                            Image("Logo").resizable().scaledToFit().frame(width: 18, height: 18)
                             TypingDots()
                             Text(model.selected.isEmpty ? "" : "\(model.roomLabel) tænker").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                         }.padding(.horizontal, 20).id("typing")
@@ -279,7 +279,8 @@ struct BookChatView: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: model.selected.isEmpty ? "asterisk" : "person.2").font(.system(size: 12, weight: .semibold))
+                            if model.selected.isEmpty { Image("Logo").resizable().scaledToFit().frame(width: 16, height: 16) }
+                            else { Image(systemName: "person.2").font(.system(size: 12, weight: .semibold)) }
                             Text(model.roomLabel).font(.system(size: 14, weight: .medium)).lineLimit(1)
                             Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary)
                         }
@@ -462,7 +463,8 @@ struct BookBubble: View {
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: m.agent == nil ? "asterisk" : "person.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5)
+                    if m.agent == nil { Image("Logo").resizable().scaledToFit().frame(width: 18, height: 18).padding(.top, 3) }
+                    else { Image(systemName: "person.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5) }
                     VStack(alignment: .leading, spacing: 4) {
                         if let f = m.from, f != "Bogen" { Text(f).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary) }
                         Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
