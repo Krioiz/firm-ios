@@ -46,33 +46,35 @@ struct PairingView: View {
     let code: String?; let checking: Bool; let paired: Bool?
     let retry: () async -> Void
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 44, weight: .semibold)).foregroundStyle(Color.indigo)
-            Text("Tradster").font(.system(size: 30, weight: .bold))
-            if paired == nil {
-                ProgressView()
-            } else {
-                Text("Godkend denne telefon i firmaets dashboard under Enheder.")
-                    .multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 32)
-                if let code {
-                    Text(code).font(.system(size: 40, weight: .bold, design: .monospaced)).kerning(6)
-                        .padding(.horizontal, 24).padding(.vertical, 14)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        ZStack {
+            Theme.bg.ignoresSafeArea()
+            VStack(spacing: 18) {
+                Spacer()
+                Image(systemName: "asterisk").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.accent)
+                Text("Tradster").font(.system(size: 34, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
+                if paired == nil {
+                    ProgressView().tint(Theme.secondary)
                 } else {
-                    Text("Ingen forbindelse til serveren.").foregroundStyle(.secondary)
+                    Text("Godkend denne telefon i firmaets dashboard under Enheder.")
+                        .font(.system(size: 15)).multilineTextAlignment(.center).foregroundStyle(Theme.secondary).padding(.horizontal, 36)
+                    if let code {
+                        Text(code).font(.system(size: 40, weight: .semibold, design: .monospaced)).kerning(6).foregroundStyle(Theme.text)
+                            .padding(.horizontal, 24).padding(.vertical, 14)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    } else {
+                        Text("Ingen forbindelse til serveren.").foregroundStyle(Theme.secondary)
+                    }
+                    Button { Task { await retry() } } label: {
+                        HStack { if checking { ProgressView().tint(Theme.bg) }; Text("Prøv igen") }
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.bg)
+                            .padding(.horizontal, 28).padding(.vertical, 12)
+                            .background(Theme.accent, in: Capsule())
+                    }.disabled(checking)
                 }
-                Button { Task { await retry() } } label: {
-                    HStack { if checking { ProgressView().tint(.white) }; Text("Prøv igen") }
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 28).padding(.vertical, 12)
-                        .background(Color.indigo, in: Capsule())
-                }.disabled(checking)
+                Spacer()
+                Text("Papir på Kraken · ingen rigtige penge").font(.footnote).foregroundStyle(Theme.secondary.opacity(0.7)).padding(.bottom, 24)
             }
-            Spacer()
-            Text("Papirhandler på Kraken. Ingen rigtige penge.").font(.footnote).foregroundStyle(.tertiary).padding(.bottom, 24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemGroupedBackground))
+        .preferredColorScheme(.dark)
     }
 }

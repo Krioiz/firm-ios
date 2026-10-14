@@ -7,7 +7,9 @@ import Charts
 // the hourly price since entry. The cards are built by plain code on the server from the
 // paper books on disk (GET /dashboard/book/today); the text is the model's (POST .../chat).
 // A number on a card never comes from the model.
-
+//
+// Look, by Marco's call (14 Oct 2026): like a chat app you would actually use -- one big
+// serif question on an empty screen, a composer at the bottom, no tabs, always dark.
 
 struct BookPt: Codable, Hashable { let t: Double; let c: Double }
 struct BookCard: Codable, Identifiable, Hashable {
@@ -37,7 +39,7 @@ struct BookMsg: Identifiable, Hashable {
     @Published var error: String? = nil
     @Published var today: BookToday? = nil
 
-    static let suggestions = ["Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?"]
+    static let suggestions = ["Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil) -> URLRequest {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/\(path)")!)
@@ -52,16 +54,14 @@ struct BookMsg: Identifiable, Hashable {
         return r
     }
 
-    /// The opening message is not a model's: it is the headline and the open legs, from disk.
+    /// The headline and the open legs, from disk, so the empty screen already knows the book.
     func load() async {
         guard let (d, _) = try? await URLSession.shared.data(for: request("today")),
               let t = try? JSONDecoder().decode(BookToday.self, from: d) else { return }
         today = t
-        if messages.isEmpty {
-            let open = (t.cards ?? []).filter { $0.status == "open" }
-            messages.append(BookMsg(role: "assistant", text: t.headline ?? "Bogen er tom.", at: t.at ?? "", cards: open))
-        }
     }
+
+    var openCards: [BookCard] { (today?.cards ?? []).filter { $0.status == "open" } }
 
     func send(_ text: String) async {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -84,110 +84,172 @@ struct BookMsg: Identifiable, Hashable {
         }
         sending = false
     }
+
+    func clear() { messages = [] }
 }
 
+// ---- the one screen ---------------------------------------------------------------------
 struct BookChatView: View {
     @StateObject private var model = BookChatModel()
     @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(model.messages) { m in BookBubble(m: m) }
-                        if model.sending {
-                            HStack { TypingDots(); Spacer() }.padding(.horizontal, 16).id("typing")
-                        }
-                        if model.messages.count <= 1 && !model.sending {
-                            suggestions
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                    }.padding(.vertical, 12)
+        ZStack {
+            Theme.bg.ignoresSafeArea()
+            VStack(spacing: 0) {
+                topBar
+                if model.messages.isEmpty {
+                    emptyState
+                } else {
+                    thread
                 }
-                .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-                .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-            }
-            composer
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Bogen").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text("Bogen").font(.system(size: 16, weight: .semibold))
-                    Text(model.sending ? "tænker…" : "papir · Kraken").font(.system(size: 11))
-                        .foregroundStyle(model.sending ? Color.accentColor : .secondary)
-                }
+                composer
             }
         }
+        .preferredColorScheme(.dark)
+        .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
-        .refreshable { await model.load() }
         .alert("Kunne ikke svare", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
             Button("OK", role: .cancel) {}
         } message: { Text(model.error ?? "") }
     }
 
-    private var suggestions: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(BookChatModel.suggestions, id: \.self) { s in
-                    Button { Task { await model.send(s) } } label: {
-                        Text(s).font(.system(size: 14, weight: .medium))
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                    }.buttonStyle(.plain)
+    private var topBar: some View {
+        HStack {
+            Text("Tradster").font(.system(size: 17, weight: .semibold, design: .serif)).foregroundStyle(Theme.text)
+            Spacer()
+            if !model.messages.isEmpty {
+                Button { withAnimation { model.clear() } } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.secondary)
                 }
-            }.padding(.horizontal, 16)
+            }
+        }
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 6)
+    }
+
+    /// The question, alone on the screen, until he asks one.
+    private var emptyState: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                Spacer(minLength: 70)
+                Image(systemName: "asterisk").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.accent).padding(.bottom, 22)
+                Text("Hvad vil du vide\nom bogen?")
+                    .font(.system(size: 36, weight: .regular, design: .serif))
+                    .foregroundStyle(Theme.text).multilineTextAlignment(.center).lineSpacing(2)
+                if let h = model.today?.headline {
+                    Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                        .multilineTextAlignment(.center).padding(.top, 16).padding(.horizontal, 36)
+                }
+                VStack(spacing: 8) {
+                    ForEach(BookChatModel.suggestions.prefix(3), id: \.self) { s in
+                        Button { Task { await model.send(s) } } label: {
+                            HStack {
+                                Text(s).font(.system(size: 15)).foregroundStyle(Theme.text)
+                                Spacer()
+                                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 13)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }.buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.top, 40)
+                if !model.openCards.isEmpty {
+                    HStack(spacing: -8) {
+                        ForEach(model.openCards.prefix(6)) { c in
+                            CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 26)
+                                .overlay(Circle().stroke(Theme.bg, lineWidth: 2))
+                        }
+                        Text("\(model.openCards.count) ben åbne").font(.system(size: 12)).foregroundStyle(Theme.secondary).padding(.leading, 16)
+                    }
+                    .padding(.top, 28)
+                }
+                Spacer(minLength: 40)
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var thread: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(model.messages) { m in BookBubble(m: m) }
+                    if model.sending {
+                        HStack(spacing: 8) { Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent); TypingDots() }
+                            .padding(.horizontal, 20).id("typing")
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }.padding(.vertical, 14)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
+            .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
         }
     }
 
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty && !model.sending }
+
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Spørg bogen…", text: $draft, axis: .vertical)
-                .lineLimit(1...5).focused($focused)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            Button {
-                let t = draft; draft = ""
-                Task { await model.send(t) }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
-                    .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty || model.sending ? Color.secondary : Color.accentColor)
+        VStack(spacing: 0) {
+            HStack(alignment: .bottom, spacing: 10) {
+                Menu {
+                    ForEach(BookChatModel.suggestions, id: \.self) { s in
+                        Button(s) { Task { await model.send(s) } }
+                    }
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
+                        .frame(width: 34, height: 34).background(Theme.surface2, in: Circle())
+                }
+                TextField("", text: $draft, prompt: Text("Spørg bogen").foregroundStyle(Theme.secondary), axis: .vertical)
+                    .lineLimit(1...6).focused($focused)
+                    .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
+                    .padding(.vertical, 7)
+                Button {
+                    let t = draft; draft = ""
+                    Task { await model.send(t) }
+                } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(canSend ? Theme.bg : Theme.secondary)
+                        .frame(width: 34, height: 34)
+                        .background(canSend ? Theme.accent : Theme.surface2, in: Circle())
+                }
+                .disabled(!canSend)
             }
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || model.sending)
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Theme.line, lineWidth: 1))
+            .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 10)
+            Text("Papir på Kraken · ingen rigtige penge").font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.7)).padding(.bottom, 4)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.bar)
+        .background(Theme.bg)
     }
 }
 
+// ---- messages ---------------------------------------------------------------------------
 struct BookBubble: View {
     let m: BookMsg
     private var mine: Bool { m.role == "user" }
     var body: some View {
-        VStack(alignment: mine ? .trailing : .leading, spacing: 8) {
-            HStack(alignment: .bottom, spacing: 8) {
-                if mine { Spacer(minLength: 48) } else { bookAvatar }
-                VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
-                    Text(m.text).font(.system(size: 16)).textSelection(.enabled)
-                        .foregroundStyle(mine ? .white : .primary)
-                        .padding(.horizontal, 13).padding(.vertical, 9)
-                        .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
-                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    Text(Tradster.when(m.at)).font(.system(size: 10)).foregroundStyle(.tertiary)
+        if mine {
+            HStack {
+                Spacer(minLength: 60)
+                Text(m.text).font(.system(size: 16)).foregroundStyle(Theme.text).textSelection(.enabled)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }.padding(.horizontal, 16)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "asterisk").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent).padding(.top, 5)
+                    Text(m.text).font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
                 }
-                if !mine { Spacer(minLength: 48) }
-            }
-            if !m.cards.isEmpty {
-                VStack(spacing: 8) { ForEach(m.cards) { CoinCard(c: $0) } }.padding(.leading, 34)
-            }
-        }.padding(.horizontal, 12)
-    }
-    private var bookAvatar: some View {
-        Image(systemName: "book.closed.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-            .frame(width: 26, height: 26).background(Color.indigo, in: Circle())
+                if !m.cards.isEmpty {
+                    VStack(spacing: 8) { ForEach(m.cards) { CoinCard(c: $0) } }.padding(.leading, 22)
+                }
+            }.padding(.horizontal, 20)
+        }
     }
 }
 
@@ -207,14 +269,14 @@ struct CoinLogo: View {
         .frame(width: size, height: size).clipShape(Circle())
     }
     private var placeholder: some View {
-        Circle().fill(Color.secondary.opacity(0.2)).overlay(Image(systemName: "bitcoinsign").font(.system(size: size * 0.4)).foregroundStyle(.secondary))
+        Circle().fill(Theme.surface2).overlay(Image(systemName: "bitcoinsign").font(.system(size: size * 0.4)).foregroundStyle(Theme.secondary))
     }
 }
 
 struct CoinCard: View {
     let c: BookCard
     private var isShort: Bool { c.side == "short" }
-    private var tint: Color { (c.bp ?? 0) >= 0 ? .green : .red }
+    private var tint: Color { (c.bp ?? 0) >= 0 ? Theme.up : Theme.down }
     private func px(_ v: Double) -> String {
         v >= 100 ? String(format: "%.2f", v) : v >= 1 ? String(format: "%.4f", v) : String(format: "%.6g", v)
     }
@@ -224,49 +286,52 @@ struct CoinCard: View {
                 CoinLogo(url: c.logo, fallback: c.logo_fallback)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(c.name ?? c.symbol ?? "").font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                        Text(c.symbol ?? "").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        Text(c.name ?? c.symbol ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        Text(c.symbol ?? "").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary)
                     }
                     HStack(spacing: 6) {
                         Text(isShort ? "SHORT" : "LONG").font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background((isShort ? Color.orange : Color.blue).opacity(0.15), in: Capsule())
-                            .foregroundStyle(isShort ? Color.orange : Color.blue)
-                        Text(statusLine).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                            .background((isShort ? Theme.down : Theme.up).opacity(0.18), in: Capsule())
+                            .foregroundStyle(isShort ? Theme.down : Theme.up)
+                        Text(statusLine).font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
                     }
                 }
                 Spacer()
                 if let bp = c.bp {
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(bp >= 0 ? "+\(bp) bp" : "\(bp) bp").font(.system(size: 17, weight: .bold)).monospacedDigit().foregroundStyle(tint)
-                        if let d = c.dkk { Text(String(format: "%+.0f kr", d)).font(.system(size: 11)).foregroundStyle(.secondary) }
-                        else if let e = c.entry, let m = c.mark { Text("\(px(e)) → \(px(m))").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary) }
+                        if let d = c.dkk { Text(String(format: "%+.0f kr", d)).font(.system(size: 11)).foregroundStyle(Theme.secondary) }
+                        else if let e = c.entry, let m = c.mark { Text("\(px(e)) → \(px(m))").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.secondary) }
                     }
                 } else if c.status == "waiting" {
-                    Image(systemName: "clock").foregroundStyle(.secondary)
+                    Image(systemName: "clock").foregroundStyle(Theme.secondary)
                 }
             }
             if let s = c.series, s.count > 2, let e = c.entry {
                 let lo = min(s.map(\.c).min() ?? e, e), hi = max(s.map(\.c).max() ?? e, e), pad = max((hi - lo) * 0.1, 1e-9)
                 Chart {
                     ForEach(Array(s.enumerated()), id: \.offset) { _, p in
+                        AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
+                            .foregroundStyle(LinearGradient(colors: [tint.opacity(0.25), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom))
                         LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("kurs", p.c))
                             .foregroundStyle(tint).lineStyle(.init(lineWidth: 2, lineCap: .round))
                     }
-                    RuleMark(y: .value("ind", e)).foregroundStyle(.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
-                        .annotation(position: .top, alignment: .leading) { Text("ind \(px(e))").font(.system(size: 9)).foregroundStyle(.secondary) }
+                    RuleMark(y: .value("ind", e)).foregroundStyle(Theme.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                        .annotation(position: .top, alignment: .leading) { Text("ind \(px(e))").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
                     if let o = c.opened_at, let d = ISO8601DateFormatter().date(from: o) ?? ISO8601DateFormatter.withFraction.date(from: o) {
-                        RuleMark(x: .value("aabnet", d)).foregroundStyle(.secondary.opacity(0.4)).lineStyle(.init(lineWidth: 1))
+                        RuleMark(x: .value("aabnet", d)).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
                     }
                 }
                 .chartYScale(domain: (lo - pad)...(hi + pad))
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated).hour()).font(.system(size: 9)) } }
-                .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.15)); AxisValueLabel().font(.system(size: 9)) } }
-                .frame(height: 90)
+                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated).hour()).font(.system(size: 9)).foregroundStyle(Theme.secondary) } }
+                .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 9)).foregroundStyle(Theme.secondary) } }
+                .frame(height: 96)
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line, lineWidth: 1))
     }
     private var statusLine: String {
         switch c.status {
@@ -279,10 +344,17 @@ struct CoinCard: View {
     }
 }
 
-extension ISO8601DateFormatter {
-    static let withFraction: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
-    }()
+// ---- theme: always dark, warm, one accent ---------------------------------------------
+enum Theme {
+    static let bg = Color(red: 0.078, green: 0.074, blue: 0.070)        // #141312
+    static let surface = Color(red: 0.125, green: 0.118, blue: 0.110)   // #201e1c
+    static let surface2 = Color(red: 0.180, green: 0.170, blue: 0.160)  // #2e2b29
+    static let line = Color.white.opacity(0.07)
+    static let text = Color(red: 0.925, green: 0.910, blue: 0.885)      // #ece8e2
+    static let secondary = Color(red: 0.600, green: 0.580, blue: 0.550) // #99948c
+    static let accent = Color(red: 0.851, green: 0.502, blue: 0.369)    // #d9805e
+    static let up = Color(red: 0.498, green: 0.820, blue: 0.627)        // #7fd1a0
+    static let down = Color(red: 0.941, green: 0.478, blue: 0.431)      // #f07a6e
 }
 
 // ---- what this app needs from the rest of the firm, kept local so it builds alone -------
@@ -296,19 +368,23 @@ enum Tradster {
     }
 }
 
+extension ISO8601DateFormatter {
+    static let withFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+}
+
 struct TypingDots: View {
     var scale: CGFloat = 1
     @State private var on = false
     var body: some View {
         HStack(spacing: 4 * scale) {
             ForEach(0..<3, id: \.self) { i in
-                Circle().fill(Color.secondary).frame(width: 7 * scale, height: 7 * scale)
-                    .opacity(on ? 1 : 0.3)
+                Circle().fill(Theme.secondary).frame(width: 6 * scale, height: 6 * scale)
+                    .opacity(on ? 1 : 0.25)
                     .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: on)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
         .onAppear { on = true }
     }
 }
