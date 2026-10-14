@@ -1301,19 +1301,20 @@ struct BookMap: View {
     let tap: (BookCard) -> Void
     private var maxAbs: Double { max(1, cards.map { abs(Double($0.isMarket ? Int(($0.change_pct ?? 0) * 100) : ($0.bp ?? 0))) }.max() ?? 1) }
     var body: some View {
+        let m = maxAbs          // once, not once per square
         let longs = cards.filter { $0.side == "long" }.sorted { ($0.bp ?? 0) > ($1.bp ?? 0) }
         let shorts = cards.filter { $0.side == "short" }.sorted { ($0.bp ?? 0) > ($1.bp ?? 0) }
         let other = cards.filter { $0.side != "long" && $0.side != "short" }
         VStack(alignment: .leading, spacing: 14) {
-            if !longs.isEmpty { section("LANGE", longs) }
-            if !shorts.isEmpty { section("KORTE", shorts) }
-            if !other.isEmpty { section("ANDET", other) }
+            if !longs.isEmpty { section("LANGE", longs, m) }
+            if !shorts.isEmpty { section("KORTE", shorts, m) }
+            if !other.isEmpty { section("ANDET", other, m) }
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.line, lineWidth: 1))
     }
-    private func section(_ title: String, _ list: [BookCard]) -> some View {
+    private func section(_ title: String, _ list: [BookCard], _ maxAbs: Double) -> some View {
         let avg = list.isEmpty ? 0 : Double(list.map { $0.bp ?? 0 }.reduce(0, +)) / Double(list.count)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -1377,6 +1378,14 @@ struct Sources: View {
 /// Tap a coin and you get the whole story of that leg, not a bigger copy of the card.
 struct LegDetail: View {
     let c: BookCard
+    private let chart: ChartSeries?
+    init(c: BookCard) {
+        self.c = c
+        if let s = c.series, s.count > 2 {
+            let ref = c.isMarket ? (c.prev_close ?? s[0].c) : (c.entry ?? s[0].c)
+            chart = ChartSeries(s, extra: [ref] + (c.stop.map { [$0] } ?? []), limit: 240, pad: 0.08)
+        } else { chart = nil }
+    }
     @Environment(\.dismiss) private var dismiss
     private var bpVal: Double { c.isMarket ? (c.change_pct ?? 0) * 100 : Double(c.bp ?? 0) }
     private var tint: Color { bpVal >= 0 ? Theme.up : Theme.down }
@@ -1410,15 +1419,15 @@ struct LegDetail: View {
                         .font(.system(size: 44, weight: .semibold)).monospacedDigit().foregroundStyle(tint)
                     + Text(c.isMarket ? "  mod luk i går" : String(format: "  (%+.2f %%)", bpVal / 100)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
 
-                    if let s = c.series, s.count > 2 {
+                    if let ch = chart, let s = c.series {
                         let ref = c.isMarket ? (c.prev_close ?? s[0].c) : (c.entry ?? s[0].c)
-                        let vals = s.map(\.c) + [ref] + (c.stop.map { [$0] } ?? [])
-                        let lo = vals.min() ?? 0, hi = vals.max() ?? 1, pad = max((hi - lo) * 0.08, 1e-9)
+                        let lo = ch.lo, hi = ch.hi, pad = ch.pad
+                        let fade = LinearGradient(colors: [tint.opacity(0.28), tint.opacity(0)], startPoint: .top, endPoint: .bottom)
                         Chart {
-                            ForEach(Array(s.enumerated()), id: \.offset) { _, p in
-                                AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("v", p.c))
-                                    .foregroundStyle(LinearGradient(colors: [tint.opacity(0.28), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
-                                LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("v", p.c)).foregroundStyle(tint).lineStyle(.init(lineWidth: 2.4, lineCap: .round))
+                            ForEach(ch.points) { p in
+                                AreaMark(x: .value("t", p.t), yStart: .value("lo", lo - pad), yEnd: .value("v", p.c))
+                                    .foregroundStyle(fade)
+                                LineMark(x: .value("t", p.t), y: .value("v", p.c)).foregroundStyle(tint).lineStyle(.init(lineWidth: 2.4, lineCap: .round))
                             }
                             RuleMark(y: .value("ref", ref)).foregroundStyle(Theme.secondary.opacity(0.7)).lineStyle(.init(lineWidth: 1, dash: [4, 4]))
                                 .annotation(position: .top, alignment: .leading) { Text(c.isMarket ? "luk i går" : "indgang").font(.system(size: 10)).foregroundStyle(Theme.secondary) }
@@ -1481,6 +1490,8 @@ struct LegDetail: View {
 
 struct Tile: View {
     let c: BookCard
+    private let spark: [Double]
+    init(c: BookCard) { self.c = c; spark = (c.series?.count ?? 0) > 2 ? ChartSeries.thin(c.series ?? [], limit: 48).map(\.c) : [] }
     private var tint: Color { ((c.isMarket ? (c.change_pct ?? 0) : Double(c.bp ?? 0))) >= 0 ? Theme.up : Theme.down }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1494,13 +1505,11 @@ struct Tile: View {
                     Text(c.isMarket ? "marked" : (c.side == "short" ? "short" : "long")).font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.secondary)
                 }
             }
-            if let s = c.series, s.count > 2 {
-                let v = s.map(\.c); let lo = v.min() ?? 0, hi = v.max() ?? 1
-                Chart(Array(v.enumerated()), id: \.offset) { i, y in
-                    LineMark(x: .value("i", i), y: .value("v", y)).foregroundStyle(tint).lineStyle(.init(lineWidth: 1.6, lineCap: .round))
-                }
-                .chartXAxis(.hidden).chartYAxis(.hidden).chartYScale(domain: lo...(hi > lo ? hi : lo + 1e-9))
-                .frame(height: 26)
+            if !spark.isEmpty {
+                // A tile's line has no axes and no interaction: a drawn path is the same picture for a
+                // fraction of what a Swift Charts view costs in a row you swipe through.
+                Sparkline(values: spark).stroke(tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    .frame(height: 26)
             } else { Spacer().frame(height: 26) }
             Text(c.isMarket ? String(format: "%+.2f %%", c.change_pct ?? 0) : ((c.bp ?? 0) >= 0 ? "+\(c.bp ?? 0) bp" : "\(c.bp ?? 0) bp"))
                 .font(.system(size: 15, weight: .bold)).monospacedDigit().foregroundStyle(tint)
@@ -1508,6 +1517,56 @@ struct Tile: View {
         .padding(12).frame(width: 118, alignment: .leading)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+}
+
+/// A price series made ready for a chart once, outside `body`: thinned to at most `limit` points
+/// (each bucket keeps its high and its low, so a spike survives), dates built, domain worked out.
+/// A card used to rebuild hundreds of Dates and two marks per hourly point on every render.
+struct ChartSeries {
+    struct P: Identifiable { let id: Int; let t: Date; let c: Double }
+    let points: [P]
+    let lo: Double, hi: Double, pad: Double
+    init(_ s: [BookPt], extra: [Double] = [], limit: Int = 120, pad frac: Double = 0.1) {
+        let thin = Self.thin(s, limit: limit)
+        points = thin.enumerated().map { P(id: $0.offset, t: Date(timeIntervalSince1970: $0.element.t), c: $0.element.c) }
+        var l = Double.infinity, h = -Double.infinity
+        for v in s { l = min(l, v.c); h = max(h, v.c) }
+        for v in extra { l = min(l, v); h = max(h, v) }
+        if !l.isFinite { l = 0; h = 1 }
+        lo = l; hi = h; pad = max((h - l) * frac, 1e-9)
+    }
+    static func thin(_ s: [BookPt], limit: Int) -> [BookPt] {
+        guard s.count > limit, limit >= 4 else { return s }
+        let buckets = limit / 2
+        let size = Double(s.count - 2) / Double(buckets)
+        var out: [BookPt] = [s[0]]
+        out.reserveCapacity(limit + 2)
+        for b in 0..<buckets {
+            let a = 1 + Int(Double(b) * size), z = min(s.count - 1, 1 + Int(Double(b + 1) * size))
+            guard a < z else { continue }
+            var lo = a, hi = a
+            for i in a..<z { if s[i].c < s[lo].c { lo = i }; if s[i].c > s[hi].c { hi = i } }
+            if lo == hi { out.append(s[lo]) } else { out.append(s[min(lo, hi)]); out.append(s[max(lo, hi)]) }
+        }
+        out.append(s[s.count - 1])
+        return out
+    }
+}
+
+/// The tile's little line: values scaled into the frame, no axes.
+struct Sparkline: Shape {
+    let values: [Double]
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        guard values.count > 1, let lo = values.min(), let hi = values.max() else { return p }
+        let span = hi > lo ? hi - lo : 1
+        let dx = r.width / CGFloat(values.count - 1)
+        for (i, v) in values.enumerated() {
+            let pt = CGPoint(x: r.minX + CGFloat(i) * dx, y: r.maxY - CGFloat((v - lo) / span) * r.height)
+            if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+        }
+        return p
     }
 }
 
@@ -1524,6 +1583,17 @@ struct CoinLogo: View {
 
 struct CoinCard: View {
     let c: BookCard
+    private let chart: ChartSeries?
+    private let openedAt: Date?
+    init(c: BookCard) {
+        self.c = c
+        openedAt = Tradster.date(c.opened_at)
+        if let s = c.series, s.count > 2 {
+            if c.isMarket { chart = ChartSeries(s, extra: [c.prev_close ?? s[0].c], limit: 120, pad: 0.1) }
+            else if let e = c.entry { chart = ChartSeries(s, extra: [e], limit: 120, pad: 0.1) }
+            else { chart = nil }
+        } else { chart = nil }
+    }
     private var isShort: Bool { c.side == "short" }
     private var tint: Color { (c.bp ?? 0) >= 0 ? Theme.up : Theme.down }
     private func px(_ v: Double) -> String {
@@ -1554,14 +1624,14 @@ struct CoinCard: View {
                     }
                 }
             }
-            if let s = c.series, s.count > 2 {
-                let vals = s.map(\.c) + [c.prev_close ?? s[0].c]
-                let lo = vals.min() ?? 0, hi = vals.max() ?? 1, pad = max((hi - lo) * 0.1, 1e-9)
+            if let ch = chart {
+                let lo = ch.lo, hi = ch.hi, pad = ch.pad
+                let fade = LinearGradient(colors: [col.opacity(0.22), col.opacity(0.0)], startPoint: .top, endPoint: .bottom)
                 Chart {
-                    ForEach(Array(s.enumerated()), id: \.offset) { _, p in
-                        AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
-                            .foregroundStyle(LinearGradient(colors: [col.opacity(0.22), col.opacity(0.0)], startPoint: .top, endPoint: .bottom))
-                        LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("kurs", p.c))
+                    ForEach(ch.points) { p in
+                        AreaMark(x: .value("t", p.t), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
+                            .foregroundStyle(fade)
+                        LineMark(x: .value("t", p.t), y: .value("kurs", p.c))
                             .foregroundStyle(col).lineStyle(.init(lineWidth: 2, lineCap: .round))
                     }
                     if let pc = c.prev_close {
@@ -1612,18 +1682,19 @@ struct CoinCard: View {
                     Image(systemName: "clock").foregroundStyle(Theme.secondary)
                 }
             }
-            if let s = c.series, s.count > 2, let e = c.entry {
-                let lo = min(s.map(\.c).min() ?? e, e), hi = max(s.map(\.c).max() ?? e, e), pad = max((hi - lo) * 0.1, 1e-9)
+            if let ch = chart, let e = c.entry {
+                let lo = ch.lo, hi = ch.hi, pad = ch.pad
+                let fade = LinearGradient(colors: [tint.opacity(0.25), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom)
                 Chart {
-                    ForEach(Array(s.enumerated()), id: \.offset) { _, p in
-                        AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
-                            .foregroundStyle(LinearGradient(colors: [tint.opacity(0.25), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom))
-                        LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("kurs", p.c))
+                    ForEach(ch.points) { p in
+                        AreaMark(x: .value("t", p.t), yStart: .value("lo", lo - pad), yEnd: .value("kurs", p.c))
+                            .foregroundStyle(fade)
+                        LineMark(x: .value("t", p.t), y: .value("kurs", p.c))
                             .foregroundStyle(tint).lineStyle(.init(lineWidth: 2, lineCap: .round))
                     }
                     RuleMark(y: .value("ind", e)).foregroundStyle(Theme.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
                         .annotation(position: .top, alignment: .leading) { Text("ind \(px(e))").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
-                    if let d = Tradster.date(c.opened_at) {
+                    if let d = openedAt {
                         RuleMark(x: .value("åbnet", d)).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
                     }
                 }
