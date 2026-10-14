@@ -28,7 +28,10 @@ struct ServerMsg: Codable, Identifiable, Hashable {
     var id: String { "\(at ?? "")/\(role ?? "")/\(from ?? "")/\((text ?? "").prefix(20))" }
     let role: String?; let text: String?; let at: String?; let from: String?; let agent: String?
     let cards: [BookCard]?; let image: String?
+    var sources: [SourceRow]? = nil
 }
+struct SourceRow: Codable, Hashable { let kind: String?; let name: String?; let symbol: String?; let logo: String? }
+enum AskKoda { static let note = Notification.Name("tradster.ask") }
 struct ConvRow: Codable, Identifiable, Hashable {
     let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?; let brief: Bool?
 }
@@ -46,7 +49,7 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
     @Published var error: String? = nil
     @Published var today: BookToday? = nil
 
-    static let suggestions = ["Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
+    static let suggestions = ["Giv mig et dybdegående overblik over alt", "Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval = 60) -> URLRequest {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/\(path)")!)
@@ -107,7 +110,7 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
             try? jpeg.write(to: tmp); localImage = tmp.absoluteString
         }
-        messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage))
+        messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage, sources: nil))
         do {
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
             let p = try? JSONDecoder().decode(SendResult.self, from: d)
@@ -192,6 +195,9 @@ struct BookChatView: View {
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
+        .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
+            if let q = n.userInfo?["q"] as? String { Task { await model.send(q) } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
         }
@@ -661,7 +667,7 @@ struct BookSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if let h = model.today?.headline { Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(.bottom, 4) }
-                    ForEach(model.openCards) { CoinCard(c: $0) }
+                    if !model.openCards.isEmpty { CardStrip(cards: model.openCards).padding(.horizontal, -20) }
                     if model.openCards.isEmpty { Text("Bogen er flad.").foregroundStyle(Theme.secondary) }
                 }.padding(16)
             }
@@ -709,6 +715,7 @@ struct BookBubble: View {
                 }
                 Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4).textSelection(.enabled)
                 if let cs = m.cards, !cs.isEmpty { CardStrip(cards: cs).padding(.top, 2).padding(.horizontal, -20) }
+                if let src = m.sources, !src.isEmpty { Sources(items: src) }
             }.padding(.horizontal, 20)
         }
     }
@@ -721,22 +728,198 @@ struct CardStrip: View {
     @State private var open: BookCard? = nil
     var body: some View {
         Group {
-            if cards.count == 1 { CoinCard(c: cards[0]).padding(.horizontal, 20) }
-            else {
+            if cards.count == 1 {
+                Button { Haptic.tap(); open = cards[0] } label: { CoinCard(c: cards[0]) }.buttonStyle(.plain).padding(.horizontal, 20)
+            } else if cards.count >= 6 {
+                BookMap(cards: cards) { Haptic.tap(); open = $0 }.padding(.horizontal, 20)
+            } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(cards) { c in
-                            Button { Haptic.tap(); open = c } label: { Tile(c: c) }.buttonStyle(.plain)
-                        }
+                        ForEach(cards) { c in Button { Haptic.tap(); open = c } label: { Tile(c: c) }.buttonStyle(.plain) }
                     }.padding(.horizontal, 20)
                 }
             }
         }
-        .sheet(item: $open) { c in
-            ScrollView { CoinCard(c: c).padding(16) }
-                .background(Theme.bg).presentationDetents([.medium]).presentationDragIndicator(.visible)
-                .preferredColorScheme(.dark)
+        .sheet(item: $open) { c in LegDetail(c: c) }
+    }
+}
+
+/// The whole book at a glance: every leg as a square with its logo, coloured by how it is doing
+/// (deeper colour = bigger move), longs and shorts side by side with their average.
+struct BookMap: View {
+    let cards: [BookCard]
+    let tap: (BookCard) -> Void
+    private var maxAbs: Double { max(1, cards.map { abs(Double($0.isMarket ? Int(($0.change_pct ?? 0) * 100) : ($0.bp ?? 0))) }.max() ?? 1) }
+    var body: some View {
+        let longs = cards.filter { $0.side == "long" }.sorted { ($0.bp ?? 0) > ($1.bp ?? 0) }
+        let shorts = cards.filter { $0.side == "short" }.sorted { ($0.bp ?? 0) > ($1.bp ?? 0) }
+        let other = cards.filter { $0.side != "long" && $0.side != "short" }
+        VStack(alignment: .leading, spacing: 14) {
+            if !longs.isEmpty { section("LANGE", longs) }
+            if !shorts.isEmpty { section("KORTE", shorts) }
+            if !other.isEmpty { section("ANDET", other) }
         }
+        .padding(14)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+    private func section(_ title: String, _ list: [BookCard]) -> some View {
+        let avg = list.isEmpty ? 0 : Double(list.map { $0.bp ?? 0 }.reduce(0, +)) / Double(list.count)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.secondary)
+                Spacer()
+                Text(String(format: "snit %+.0f bp", avg)).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(avg >= 0 ? Theme.up : Theme.down)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                ForEach(list) { c in
+                    let bp = Double(c.bp ?? 0)
+                    let strength = min(1, abs(bp) / maxAbs)
+                    Button { tap(c) } label: {
+                        VStack(spacing: 4) {
+                            CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 28)
+                            Text(c.symbol ?? "").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                            Text(bp >= 0 ? "+\(Int(bp))" : "\(Int(bp))").font(.system(size: 11, weight: .bold)).monospacedDigit().foregroundStyle(Theme.text.opacity(0.9))
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 9)
+                        .background((bp >= 0 ? Theme.up : Theme.down).opacity(0.10 + 0.45 * strength), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+/// Small, under the answer: where the numbers came from.
+struct Sources: View {
+    let items: [SourceRow]
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Text("Kilder").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary).padding(.trailing, 2)
+                ForEach(items, id: \.self) { src in
+                    HStack(spacing: 5) {
+                        if let l = src.logo, let u = URL(string: l) {
+                            AsyncImage(url: u) { ph in if case .success(let i) = ph { i.resizable().scaledToFit() } else { icon(src.kind) } }
+                                .frame(width: 14, height: 14).clipShape(Circle())
+                        } else { icon(src.kind) }
+                        Text(src.name ?? src.symbol ?? "").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.text.opacity(0.85)).lineLimit(1)
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
+                }
+            }
+        }
+    }
+    private func icon(_ kind: String?) -> some View {
+        Image(systemName: kind == "market" ? "chart.xyaxis.line" : kind == "ledger" ? "clock.arrow.circlepath" : "book.closed")
+            .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary).frame(width: 14, height: 14)
+    }
+}
+
+/// Tap a coin and you get the whole story of that leg, not a bigger copy of the card.
+struct LegDetail: View {
+    let c: BookCard
+    @Environment(\.dismiss) private var dismiss
+    private var bpVal: Double { c.isMarket ? (c.change_pct ?? 0) * 100 : Double(c.bp ?? 0) }
+    private var tint: Color { bpVal >= 0 ? Theme.up : Theme.down }
+    private func px(_ v: Double) -> String { v >= 100 ? String(format: "%.2f", v) : v >= 1 ? String(format: "%.4f", v) : String(format: "%.6g", v) }
+    private func date(_ s: String?) -> Date? { guard let s else { return nil }; return ISO8601DateFormatter().date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s) }
+    private func until(_ s: String?) -> String {
+        guard let d = date(s) else { return "–" }
+        let m = Int(d.timeIntervalSinceNow / 60); if m <= 0 { return "nu" }
+        return m >= 1440 ? "om \(m / 1440) d \((m % 1440) / 60) t" : "om \(m / 60) t \(m % 60) m"
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 14) {
+                        if c.isMarket {
+                            Circle().fill(Theme.surface2).frame(width: 52, height: 52).overlay(Image(systemName: "chart.xyaxis.line").font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.text))
+                        } else { CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 52) }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(c.name ?? c.symbol ?? "").font(.system(size: 24, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
+                            HStack(spacing: 6) {
+                                Text(c.symbol ?? "").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.secondary)
+                                if let side = c.side {
+                                    Text(side == "short" ? "SHORT" : "LONG").font(.system(size: 10, weight: .bold)).padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background((side == "short" ? Theme.down : Theme.up).opacity(0.18), in: Capsule()).foregroundStyle(side == "short" ? Theme.down : Theme.up)
+                                }
+                            }
+                        }
+                    }
+                    Text(c.isMarket ? String(format: "%+.2f %%", c.change_pct ?? 0) : String(format: "%+.0f bp", bpVal))
+                        .font(.system(size: 44, weight: .semibold)).monospacedDigit().foregroundStyle(tint)
+                    + Text(c.isMarket ? "  mod luk i går" : String(format: "  (%+.2f %%)", bpVal / 100)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+
+                    if let s = c.series, s.count > 2 {
+                        let ref = c.isMarket ? (c.prev_close ?? s[0].c) : (c.entry ?? s[0].c)
+                        let vals = s.map(\.c) + [ref] + (c.stop.map { [$0] } ?? [])
+                        let lo = vals.min() ?? 0, hi = vals.max() ?? 1, pad = max((hi - lo) * 0.08, 1e-9)
+                        Chart {
+                            ForEach(Array(s.enumerated()), id: \.offset) { _, p in
+                                AreaMark(x: .value("t", Date(timeIntervalSince1970: p.t)), yStart: .value("lo", lo - pad), yEnd: .value("v", p.c))
+                                    .foregroundStyle(LinearGradient(colors: [tint.opacity(0.28), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
+                                LineMark(x: .value("t", Date(timeIntervalSince1970: p.t)), y: .value("v", p.c)).foregroundStyle(tint).lineStyle(.init(lineWidth: 2.4, lineCap: .round))
+                            }
+                            RuleMark(y: .value("ref", ref)).foregroundStyle(Theme.secondary.opacity(0.7)).lineStyle(.init(lineWidth: 1, dash: [4, 4]))
+                                .annotation(position: .top, alignment: .leading) { Text(c.isMarket ? "luk i går" : "indgang").font(.system(size: 10)).foregroundStyle(Theme.secondary) }
+                            if let st = c.stop {
+                                RuleMark(y: .value("stop", st)).foregroundStyle(Theme.down.opacity(0.7)).lineStyle(.init(lineWidth: 1, dash: [2, 3]))
+                                    .annotation(position: .top, alignment: .trailing) { Text("stop").font(.system(size: 10)).foregroundStyle(Theme.down) }
+                            }
+                        }
+                        .chartYScale(domain: (lo - pad)...(hi + pad))
+                        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 10)).foregroundStyle(Theme.secondary) } }
+                        .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 10)).foregroundStyle(Theme.secondary) } }
+                        .frame(height: 240)
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        ForEach(stats, id: \.0) { k, v in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(k.uppercased()).font(.system(size: 10, weight: .semibold)).kerning(0.6).foregroundStyle(Theme.secondary)
+                                Text(v).font(.system(size: 17, weight: .medium)).monospacedDigit().foregroundStyle(Theme.text).lineLimit(1).minimumScaleFactor(0.7)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+
+                    Button {
+                        Haptic.tap(); dismiss()
+                        let q = c.isMarket ? "Giv mig et dybdegående overblik over \(c.name ?? c.symbol ?? "")" : "Giv mig et dybdegående overblik over \(c.name ?? "") (\(c.symbol ?? "")) i bogen"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { NotificationCenter.default.post(name: AskKoda.note, object: nil, userInfo: ["q": q]) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image("Logo").resizable().scaledToFit().frame(width: 20, height: 20)
+                            Text("Spørg Koda om \(c.symbol ?? "den")").font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.bg).frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Theme.text, in: Capsule())
+                    }
+                }.padding(20)
+            }
+            .background(Theme.bg)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.secondary).frame(width: 30, height: 30).background(Theme.surface2, in: Circle()) } } }
+        }
+        .presentationDetents([.large]).presentationDragIndicator(.visible)
+        .preferredColorScheme(.dark)
+    }
+    private var stats: [(String, String)] {
+        if c.isMarket {
+            let today = (c.series ?? []).filter { $0.t >= (c.day_start ?? 0) }.map(\.c)
+            return [("Sidst", c.last.map(px) ?? "–"), ("Luk i går", c.prev_close.map(px) ?? "–"),
+                    ("Dagens høj", today.max().map(px) ?? "–"), ("Dagens lav", today.min().map(px) ?? "–")]
+        }
+        var out: [(String, String)] = [("Indgang", c.entry.map(px) ?? "–"), ("Nu", (c.mark ?? c.exit).map(px) ?? "–")]
+        if c.status == "closed" { out += [("Lukket", c.why ?? "–"), ("Resultat", c.dkk.map { String(format: "%+.0f kr", $0) } ?? "–")] }
+        else { out += [("Åbnet", Tradster.when(c.opened_at)), ("Lukker", until(c.closes_at))] }
+        if let st = c.stop, let m = c.mark { out += [("Stop", px(st)), ("Til stop", String(format: "%.1f %%", (st / m - 1) * 100))] }
+        out.append(("Bog", c.book == "listing" ? "Noteringsbogen" : "Momentum-kurven"))
+        return out
     }
 }
 
