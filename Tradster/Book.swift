@@ -99,9 +99,10 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
     @Published var offline = false                // the last call could not reach the server
     @Published var retry: String? = nil           // a question that did not get an answer, to send again
     @Published var today: BookToday? = nil
-    // live, while an answer is on its way (streaming)
-    @Published var statusLines: [StatusLine] = []
-    @Published var streamText = ""
+    /// The answer while it is being written. Its own object, not @Published here: every token used
+    /// to change the model, and so re-render everything that watches it (the thread, the composer,
+    /// the drawer's list) 30-60 times a second. Only LiveAnswer watches this.
+    let live = LiveFeed()
     var streaming: Bool { UserDefaults.standard.object(forKey: "stream") as? Bool ?? true }
     /// What the line above the composer says, if anything.
     var quiet: String? { error ?? (offline ? "Ingen forbindelse" : nil) }
@@ -209,7 +210,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
     private func leave() {
         gen += 1
         inflight?.cancel(); inflight = nil
-        sending = false; statusLines = []; streamText = ""
+        sending = false; live.reset()
         error = nil; retry = nil
     }
     func delete(_ id: String) async {
@@ -285,7 +286,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
 
     /// The answer as it is written: status lines while Koda looks things up, then the text.
     private func stream(_ payload: [String: Any], _ g: Int) async {
-        statusLines = []; streamText = ""
+        live.reset()
         var got = false, broke = false
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: request("conversations/\(conversationId ?? "new")/stream", method: "POST", body: payload, timeout: 300))
@@ -301,13 +302,13 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
                     guard let ev = try? JSONDecoder().decode(StreamEvent.self, from: Data(json.utf8)) else { continue }
                     switch ev.type {
                     case "conv": if let id = ev.id { conversationId = id }
-                    case "status": statusLines.append(StatusLine(text: ev.text ?? "", source: ev.source)); Haptic.pick()
+                    case "status": live.status(StatusLine(text: ev.text ?? "", source: ev.source)); Haptic.pick()
                     case "delta":
-                        if streamText.isEmpty { Haptic.soft() }
-                        streamText += ev.text ?? ""
+                        if !live.hasText { Haptic.soft() }
+                        live.delta(ev.text ?? "")
                     case "done":
                         if let r = ev.reply { messages.append(r); got = true }
-                        streamText = ""; statusLines = []
+                        live.reset()
                     case "error": error = ev.error ?? "Kunne ikke svare"; retry = asked; Haptic.fail()
                     default: break
                     }
@@ -321,12 +322,12 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
         guard g == gen else { return }
         if broke {
             // The connection broke, not the answer: the server keeps writing. Fetch it from there.
-            statusLines = []; streamText = ""
+            live.reset()
             await follow(g, question: asked)
             guard g == gen else { return }
         }
         if got { Haptic.done(); offline = false }
-        statusLines = []; streamText = ""
+        live.reset()
         sending = false
         persist()
         await refreshList()
@@ -594,7 +595,7 @@ struct BookChatView: View {
                         }
                         if model.sending {
                             LiveAnswer(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker",
-                                       lines: model.statusLines, text: model.streamText).padding(.horizontal, 20)
+                                       live: model.live).padding(.horizontal, 20)
                         }
                         // Room under the last question, so it can sit at the top while the answer arrives.
                         Color.clear.frame(height: model.sending ? geo.size.height * 0.75 : 1).id("bottom")
@@ -808,7 +809,10 @@ extension BookChatView {
 /// While Koda works: what it is looking at, line by line with the source's logo, then the text
 /// as it is written. Before anything has come back, the breathing mark.
 struct LiveAnswer: View {
-    let label: String; let lines: [StatusLine]; let text: String
+    let label: String
+    @ObservedObject var live: LiveFeed
+    private var lines: [StatusLine] { live.lines }
+    private var text: String { live.text }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(lines.enumerated()), id: \.element.id) { i, l in
@@ -829,6 +833,58 @@ struct LiveAnswer: View {
             else { AnswerText(text: text, keep: false) }
         }
         .animation(.easeOut(duration: 0.2), value: lines.count)
+    }
+}
+
+/// The answer as it streams in. Deltas are gathered and handed to the screen at most every 50 ms:
+/// the server sends a token at a time, and a re-layout of the growing answer per token was most
+/// of the stutter while Koda wrote. 20 updates a second still reads as live typing.
+@MainActor final class LiveFeed: ObservableObject {
+    @Published private(set) var lines: [StatusLine] = []
+    @Published private(set) var text = ""
+    @Published private(set) var thinking = ""
+    @Published private(set) var thinkEnded: Date? = nil
+    private(set) var thinkStarted: Date? = nil
+    private var pendingText = "", pendingThink = ""
+    private var flusher: Task<Void, Never>? = nil
+
+    var hasText: Bool { !text.isEmpty || !pendingText.isEmpty }
+    /// How long Koda thought, once it has started writing (or so far, while it still thinks).
+    var thinkSeconds: Double? { thinkStarted.map { (thinkEnded ?? Date()).timeIntervalSince($0) } }
+
+    func status(_ l: StatusLine) { flush(); lines.append(l) }
+    func delta(_ s: String) {
+        if thinkStarted != nil, thinkEnded == nil { flush(); thinkEnded = Date() }
+        pendingText += s; schedule()
+    }
+    /// The server may send the reasoning as pieces or as the whole text so far; either works.
+    func think(_ s: String) {
+        if thinkStarted == nil { thinkStarted = Date() }
+        let sofar = thinking + pendingThink
+        if !sofar.isEmpty, s.hasPrefix(sofar) { pendingThink += String(s.dropFirst(sofar.count)) } else { pendingThink += s }
+        schedule()
+    }
+    func flush() {
+        flusher?.cancel(); flusher = nil
+        if !pendingThink.isEmpty { thinking += pendingThink; pendingThink = "" }
+        if !pendingText.isEmpty { text += pendingText; pendingText = "" }
+    }
+    private func schedule() {
+        guard flusher == nil else { return }
+        flusher = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled, let self else { return }
+            self.flusher = nil
+            self.flush()
+        }
+    }
+    func reset() {
+        flusher?.cancel(); flusher = nil
+        pendingText = ""; pendingThink = ""; thinkStarted = nil
+        if !lines.isEmpty { lines = [] }
+        if !text.isEmpty { text = "" }
+        if !thinking.isEmpty { thinking = "" }
+        if thinkEnded != nil { thinkEnded = nil }
     }
 }
 
