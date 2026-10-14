@@ -21,8 +21,11 @@ def prepare(type, ids = nil)
     UI.message("created bundle id #{bid}")
   end
   match(type: type, app_identifier: ids, api_key: api, readonly: false,
-        git_url: "https://github.com/Krioiz/firm-ios.git", git_branch: "certs",
-        git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['GITHUB_TOKEN']}"),
+        # 14 Oct 2026: the certificates moved to their own PRIVATE repo so this one can be public
+        # (public = free macOS runners). The job's own GITHUB_TOKEN cannot see another repo, so
+        # the workflow passes CERTS_TOKEN, a token with access to firm-certs.
+        git_url: "https://github.com/Krioiz/firm-certs.git", git_branch: "certs",
+        git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['CERTS_TOKEN'] || ENV['GITHUB_TOKEN']}"),
         force_for_new_devices: true, force: ENV["MATCH_FORCE"] == "1")
   # project.yml names the Development profile on both targets. match makes AppStore profiles for
   # the appstore type, so Xcode goes looking for a profile that does not exist and the archive

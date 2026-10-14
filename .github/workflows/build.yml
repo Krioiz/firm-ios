@@ -21,6 +21,7 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_FORCE: "1"
           GITHUB_TOKEN: ${{ github.token }}
+          CERTS_TOKEN: ${{ secrets.CERTS_TOKEN }}
         run: fastlane build
       - uses: actions/upload-artifact@v4
         with: { name: Firm-ipa, path: out/Firm.ipa }
