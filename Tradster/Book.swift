@@ -284,21 +284,31 @@ struct BookChatView: View {
     }
 
     private var thread: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(model.messages) { m in BookBubble(m: m) }
-                    if model.sending {
-                        Thinking(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20).id("typing")
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 22) {
+                        ForEach(model.messages) { m in BookBubble(m: m).id(m.id) }
+                        if model.sending {
+                            Thinking(label: model.selected.isEmpty ? "Koda tænker" : "\(model.roomLabel) tænker").padding(.horizontal, 20)
+                        }
+                        // Room under the last question, so it can sit at the top while the answer arrives.
+                        Color.clear.frame(height: model.sending ? geo.size.height * 0.75 : 1).id("bottom")
+                    }.padding(.vertical, 14)
+                }
+                .scrollDismissesKeyboard(.immediately)
+                .onTapGesture { focused = false }
+                .onChange(of: model.messages.count) { old, new in
+                    guard new > old, let last = model.messages.last else { return }
+                    if last.role == "user" {
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .top) }   // your question to the top
+                    } else if let q = model.messages.last(where: { $0.role == "user" }) {
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(q.id, anchor: .top) }      // the answer reads down from it
                     }
-                    Color.clear.frame(height: 1).id("bottom")
-                }.padding(.vertical, 14)
+                }
+                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: model.conversationId) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            .scrollDismissesKeyboard(.immediately)
-            .onTapGesture { focused = false }
-            .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-            .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-            .onAppear { proxy.scrollTo("bottom") }
         }
     }
 
@@ -695,11 +705,67 @@ struct BookBubble: View {
                     Text(f.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.accent)
                 }
                 Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4).textSelection(.enabled)
-                if let cs = m.cards, !cs.isEmpty {
-                    VStack(spacing: 8) { ForEach(cs) { CoinCard(c: $0) } }.padding(.top, 2)
-                }
+                if let cs = m.cards, !cs.isEmpty { CardStrip(cards: cs).padding(.top, 2).padding(.horizontal, -20) }
             }.padding(.horizontal, 20)
         }
+    }
+}
+
+/// Answers no longer arrive as a wall of charts. One card shows in full; several become a row
+/// of tiles to swipe through, each with logo, ticker, bp and a tiny line. Tap one to open it.
+struct CardStrip: View {
+    let cards: [BookCard]
+    @State private var open: BookCard? = nil
+    var body: some View {
+        Group {
+            if cards.count == 1 { CoinCard(c: cards[0]).padding(.horizontal, 20) }
+            else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(cards) { c in
+                            Button { open = c } label: { Tile(c: c) }.buttonStyle(.plain)
+                        }
+                    }.padding(.horizontal, 20)
+                }
+            }
+        }
+        .sheet(item: $open) { c in
+            ScrollView { CoinCard(c: c).padding(16) }
+                .background(Theme.bg).presentationDetents([.medium]).presentationDragIndicator(.visible)
+                .preferredColorScheme(.dark)
+        }
+    }
+}
+
+struct Tile: View {
+    let c: BookCard
+    private var tint: Color { ((c.isMarket ? (c.change_pct ?? 0) : Double(c.bp ?? 0))) >= 0 ? Theme.up : Theme.down }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if c.isMarket {
+                    Circle().fill(Theme.surface2).frame(width: 26, height: 26)
+                        .overlay(Image(systemName: "chart.xyaxis.line").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text))
+                } else { CoinLogo(url: c.logo, fallback: c.logo_fallback, size: 26) }
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(c.symbol ?? "").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    Text(c.isMarket ? "marked" : (c.side == "short" ? "short" : "long")).font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.secondary)
+                }
+            }
+            if let s = c.series, s.count > 2 {
+                let v = s.map(\.c); let lo = v.min() ?? 0, hi = v.max() ?? 1
+                Chart(Array(v.enumerated()), id: \.offset) { i, y in
+                    LineMark(x: .value("i", i), y: .value("v", y)).foregroundStyle(tint).lineStyle(.init(lineWidth: 1.6, lineCap: .round))
+                }
+                .chartXAxis(.hidden).chartYAxis(.hidden).chartYScale(domain: lo...(hi > lo ? hi : lo + 1e-9))
+                .frame(height: 26)
+            } else { Spacer().frame(height: 26) }
+            Text(c.isMarket ? String(format: "%+.2f %%", c.change_pct ?? 0) : ((c.bp ?? 0) >= 0 ? "+\(c.bp ?? 0) bp" : "\(c.bp ?? 0) bp"))
+                .font(.system(size: 15, weight: .bold)).monospacedDigit().foregroundStyle(tint)
+        }
+        .padding(12).frame(width: 118, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line, lineWidth: 1))
     }
 }
 
