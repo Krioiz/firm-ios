@@ -1289,8 +1289,9 @@ struct ArtifactChart: View {
     init(a: Artifact) {
         self.a = a
         let s = a.series ?? []
-        timed = s.allSatisfy { $0.t != nil }
-        let pts = s.enumerated().map { BookPt(t: timed ? ($0.element.t ?? 0) : Double($0.offset), c: $0.element.v) }
+        let isTimed = s.allSatisfy { $0.t != nil }
+        timed = isTimed
+        let pts = s.enumerated().map { BookPt(t: isTimed ? ($0.element.t ?? 0) : Double($0.offset), c: $0.element.v) }
         chart = ChartSeries(pts, limit: 160, pad: 0.08)
         tint = (s.last?.v ?? 0) >= (s.first?.v ?? 0) ? Theme.up : Theme.down
     }
