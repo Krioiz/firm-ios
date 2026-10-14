@@ -15,6 +15,7 @@ def prepare(type, ids = nil)
     next if existing.include?(bid)
     nice = if bid.end_with?("widget") then "The Firm Widget"
            elsif bid.end_with?("sizer") then "Max Sizer"
+           elsif bid.end_with?("tradster") then "Tradster"
            else "The Firm" end
     Spaceship::ConnectAPI::BundleId.create(name: nice, identifier: bid, platform: "IOS")
     UI.message("created bundle id #{bid}")
@@ -134,6 +135,49 @@ platform :ios do
                                 provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
               xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Distribution' CODE_SIGN_STYLE=Manual")
     upload_to_testflight(api_key: api, app_identifier: "com.getstubbie.sizer",
+                         skip_waiting_for_build_processing: true, skip_submission: true)
+  end
+
+  # ---- Tradster --------------------------------------------------------------------------
+  # The trading book as a chat. Its own app by Marco's call, same project, same signing path.
+  TRADSTER_IDS = ["com.getstubbie.tradster"]
+
+  desc "Tradster — development build, installable on registered devices"
+  lane :tradster_device do
+    prepare("development", TRADSTER_IDS)
+    require_scheme("Tradster")
+    build_app(project: "Firm.xcodeproj", scheme: "Tradster", configuration: "Release",
+              export_method: "development", output_directory: "out", output_name: "Tradster.ipa",
+              export_options: { method: "development",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Development' CODE_SIGN_STYLE=Manual")
+  end
+
+  desc "Tradster — App Store signed, uploaded to TestFlight"
+  lane :tradster_testflight do
+    api = prepare("appstore", TRADSTER_IDS)
+    require_scheme("Tradster")
+    build_app(project: "Firm.xcodeproj", scheme: "Tradster", configuration: "Release",
+              export_method: "app-store", output_directory: "out", output_name: "Tradster.ipa",
+              export_options: { method: "app-store",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Distribution' CODE_SIGN_STYLE=Manual")
+    # A DRAFT App Store Connect record, as for The Firm: nothing submitted, nothing public.
+    begin
+      existing = Spaceship::ConnectAPI::App.find("com.getstubbie.tradster")
+      if existing
+        UI.message("app record already exists: #{existing.name}")
+      else
+        Spaceship::ConnectAPI::App.create(name: ENV["TRADSTER_APP_NAME"] || "Tradster by Stubbie",
+                                          version_string: "1.0", sku: "com.getstubbie.tradster",
+                                          primary_locale: "en-US", bundle_id: "com.getstubbie.tradster",
+                                          platforms: ["IOS"])
+        UI.success("created the App Store Connect record for Tradster")
+      end
+    rescue => e
+      UI.important("could not create the app record: #{e.message}")
+    end
+    upload_to_testflight(api_key: api, app_identifier: "com.getstubbie.tradster",
                          skip_waiting_for_build_processing: true, skip_submission: true)
   end
 end

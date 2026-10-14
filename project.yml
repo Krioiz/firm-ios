@@ -24,6 +24,10 @@ schemes:
     build:
       targets: { Sizer: all }
     archive: { config: Release }
+  Tradster:
+    build:
+      targets: { Tradster: all }
+    archive: { config: Release }
 
 targets:
   Firm:
@@ -75,6 +79,30 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.sizer"
         CODE_SIGN_ENTITLEMENTS: Sizer/Sizer.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  # Tradster — the trading book as a chat. Its own app and bundle id, by Marco's call (14 Oct
+  # 2026): not a tab in The Firm. Self-contained sources so it builds without the Firm target.
+  Tradster:
+    type: application
+    platform: iOS
+    sources: [Tradster]
+    info:
+      path: Tradster/Info.plist
+      properties:
+        CFBundleDisplayName: Tradster
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.tradster
+        PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.tradster"
+        CODE_SIGN_ENTITLEMENTS: Tradster/Tradster.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "1.0"
 
   FirmWidget:
     type: app-extension

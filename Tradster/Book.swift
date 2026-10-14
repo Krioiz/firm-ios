@@ -1,14 +1,13 @@
 import SwiftUI
 import Charts
 
-// ---- the book as a conversation ------------------------------------------------------
+// ---- Tradster: the book as a conversation --------------------------------------------
 // "Hvad koebte vi i dag?" Ask, and the answer comes back as text from the firm's own model
 // plus the coins it talks about as cards: name, logo, side, entry -> mark, basis points and
 // the hourly price since entry. The cards are built by plain code on the server from the
 // paper books on disk (GET /dashboard/book/today); the text is the model's (POST .../chat).
 // A number on a card never comes from the model.
 
-struct BookRef: Hashable { let id = "book" }
 
 struct BookPt: Codable, Hashable { let t: Double; let c: Double }
 struct BookCard: Codable, Identifiable, Hashable {
@@ -41,9 +40,9 @@ struct BookMsg: Identifiable, Hashable {
     static let suggestions = ["Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?"]
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil) -> URLRequest {
-        var r = URLRequest(url: URL(string: "\(Store.base)/book/\(path)")!)
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/\(path)")!)
         r.httpMethod = method
-        r.setValue("FirmApp/3.0", forHTTPHeaderField: "User-Agent")
+        r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.timeoutInterval = 90
         if let body {
@@ -90,7 +89,6 @@ struct BookMsg: Identifiable, Hashable {
 struct BookChatView: View {
     @StateObject private var model = BookChatModel()
     @State private var draft = ""
-    @State private var atBottom = true
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -108,7 +106,6 @@ struct BookChatView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.vertical, 12)
                 }
-                .followsBottom($atBottom)
                 .onChange(of: model.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
                 .onChange(of: model.sending) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             }
@@ -179,7 +176,7 @@ struct BookBubble: View {
                         .padding(.horizontal, 13).padding(.vertical, 9)
                         .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
                                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    Text(Fmt.when(m.at)).font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text(Tradster.when(m.at)).font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 if !mine { Spacer(minLength: 48) }
             }
@@ -273,11 +270,11 @@ struct CoinCard: View {
     }
     private var statusLine: String {
         switch c.status {
-        case "closed": return "lukket \(c.why ?? "") · \(Fmt.when(c.closed_at))"
+        case "closed": return "lukket \(c.why ?? "") · \(Tradster.when(c.closed_at))"
         case "waiting": return c.note ?? "venter"
         default:
             let book = c.book == "listing" ? "notering" : "kurv"
-            return "\(book) · åbnet \(Fmt.when(c.opened_at)) · ud \(Fmt.when(c.closes_at))"
+            return "\(book) · åbnet \(Tradster.when(c.opened_at)) · ud \(Tradster.when(c.closes_at))"
         }
     }
 }
@@ -286,4 +283,32 @@ extension ISO8601DateFormatter {
     static let withFraction: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
+}
+
+// ---- what this app needs from the rest of the firm, kept local so it builds alone -------
+enum Tradster {
+    static let base = "https://getstubbie.com/dashboard"
+    static func when(_ s: String?) -> String {
+        guard let s, let d = ISO8601DateFormatter().date(from: s) ?? ISO8601DateFormatter.withFraction.date(from: s) else { return "" }
+        let f = DateFormatter(); f.locale = Locale(identifier: "da_DK")
+        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "d. MMM HH:mm"
+        return f.string(from: d)
+    }
+}
+
+struct TypingDots: View {
+    var scale: CGFloat = 1
+    @State private var on = false
+    var body: some View {
+        HStack(spacing: 4 * scale) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle().fill(Color.secondary).frame(width: 7 * scale, height: 7 * scale)
+                    .opacity(on ? 1 : 0.3)
+                    .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: on)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+        .onAppear { on = true }
+    }
 }

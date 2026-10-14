@@ -9,6 +9,8 @@ name: Build The Firm
 #   device            The Firm, development signed, downloadable .ipa
 #   sizer_testflight  Max Sizer, App Store signed, uploaded to TestFlight
 #   sizer_device      Max Sizer, development signed, downloadable .ipa
+#   tradster_testflight  Tradster, App Store signed, uploaded to TestFlight
+#   tradster_device      Tradster, development signed, downloadable .ipa
 
 on:
   workflow_dispatch:
@@ -17,7 +19,7 @@ on:
         description: What to build
         type: choice
         default: testflight
-        options: [testflight, device, sizer_device, sizer_testflight]
+        options: [testflight, device, sizer_device, sizer_testflight, tradster_device, tradster_testflight]
 
 permissions:
   contents: write
@@ -83,6 +85,7 @@ jobs:
         run: |
           case "${{ inputs.lane }}" in
             sizer_device) TAG=sizer-${GITHUB_RUN_NUMBER}; TITLE="Max Sizer build ${GITHUB_RUN_NUMBER}" ;;
+            tradster_device) TAG=tradster-${GITHUB_RUN_NUMBER}; TITLE="Tradster build ${GITHUB_RUN_NUMBER}" ;;
             *)            TAG=firm-${GITHUB_RUN_NUMBER};  TITLE="The Firm build ${GITHUB_RUN_NUMBER}" ;;
           esac
           gh release create "$TAG" out/*.ipa --title "$TITLE" --notes "Development signed. Sideload it." --repo "$GITHUB_REPOSITORY"
