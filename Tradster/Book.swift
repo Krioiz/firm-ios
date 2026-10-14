@@ -39,6 +39,91 @@ struct ServerMsg: Codable, Identifiable, Hashable, Sendable {
     let role: String?; let text: String?; let at: String?; let from: String?; let agent: String?
     let cards: [BookCard]?; let image: String?
     var sources: [SourceRow]? = nil
+    // From Analyse and Udfør: what Koda thought (and for how long), the steps it took, and tables or
+    // charts it made. All optional; an older server simply leaves them out.
+    var thinking: String? = nil
+    var thinking_s: Double? = nil
+    var steps: [Step]? = nil
+    var artifacts: [Artifact]? = nil
+    enum CodingKeys: String, CodingKey { case role, text, at, from, agent, cards, image, sources, thinking, thinking_s, steps, artifacts }
+}
+/// Read loosely: one odd field must never cost the whole conversation. Before this, a reply the
+/// phone could not decode made the conversation fail to open at all.
+extension ServerMsg {
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func opt<T: Decodable>(_ t: T.Type, _ k: CodingKeys) -> T? { (try? c.decodeIfPresent(T.self, forKey: k)) ?? nil }
+        role = opt(String.self, .role); text = opt(String.self, .text); at = opt(String.self, .at)
+        from = opt(String.self, .from); agent = opt(String.self, .agent); image = opt(String.self, .image)
+        cards = opt([Lossy<BookCard>].self, .cards)?.compactMap(\.value)
+        sources = opt([Lossy<SourceRow>].self, .sources)?.compactMap(\.value)
+        thinking = opt(String.self, .thinking)
+        thinking_s = opt(Double.self, .thinking_s)
+        steps = opt([Lossy<Step>].self, .steps)?.compactMap(\.value)
+        artifacts = opt([Lossy<Artifact>].self, .artifacts)?.compactMap(\.value)
+    }
+}
+/// An element that failed to decode becomes nil instead of failing the array.
+struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from d: Decoder) throws { value = try? T(from: d) }
+}
+/// A JSON scalar as text: tables arrive with numbers and strings mixed.
+struct Cell: Decodable {
+    let text: String
+    init(from d: Decoder) throws {
+        let c = try d.singleValueContainer()
+        if c.decodeNil() { text = "" }
+        else if let s = try? c.decode(String.self) { text = s }
+        else if let i = try? c.decode(Int.self) { text = String(i) }
+        else if let x = try? c.decode(Double.self) { text = Cell.num(x) }
+        else if let b = try? c.decode(Bool.self) { text = b ? "ja" : "nej" }
+        else { text = "" }
+    }
+    static func num(_ x: Double) -> String {
+        let a = abs(x)
+        return a >= 1000 ? String(format: "%.0f", x) : a >= 1 ? String(format: "%.2f", x) : a == 0 ? "0" : String(format: "%.4g", x)
+    }
+}
+struct Step: Codable, Hashable, Sendable {
+    var title: String?; var detail: String?; var ok: Bool?; var status: String?
+    var failed: Bool { ok == false || ["failed", "error", "fejl"].contains(status ?? "") }
+    enum CodingKeys: String, CodingKey { case title, detail, ok, status }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        title = (try? c.decodeIfPresent(Cell.self, forKey: .title))??.text
+        detail = (try? c.decodeIfPresent(Cell.self, forKey: .detail))??.text
+        ok = (try? c.decodeIfPresent(Bool.self, forKey: .ok)) ?? nil
+        status = (try? c.decodeIfPresent(String.self, forKey: .status)) ?? nil
+    }
+}
+struct ArtPt: Codable, Hashable, Sendable {
+    var t: Double?; var label: String?; var v: Double
+    enum CodingKeys: String, CodingKey { case t, label, v }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        if let x = (try? c.decodeIfPresent(Double.self, forKey: .v)) ?? nil { v = x }
+        else if let s = (try? c.decodeIfPresent(String.self, forKey: .v)) ?? nil, let x = Double(s.replacingOccurrences(of: ",", with: ".")) { v = x }
+        else { throw DecodingError.dataCorruptedError(forKey: .v, in: c, debugDescription: "no value") }
+        label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil
+        if let x = (try? c.decodeIfPresent(Double.self, forKey: .t)) ?? nil { t = x > 1e11 ? x / 1000 : x }     // seconds or ms
+        else if let s = (try? c.decodeIfPresent(String.self, forKey: .t)) ?? nil {
+            if let dt = Tradster.date(s) ?? Tradster.day(s) { t = dt.timeIntervalSince1970 } else { t = nil; if label == nil { label = s } }
+        } else { t = nil }
+    }
+}
+struct Artifact: Codable, Hashable, Sendable {
+    var kind: String?; var title: String?; var columns: [String]?; var rows: [[String]]?; var series: [ArtPt]?; var text: String?
+    enum CodingKeys: String, CodingKey { case kind, title, columns, rows, series, text }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? nil
+        title = (try? c.decodeIfPresent(Cell.self, forKey: .title))??.text
+        columns = (try? c.decodeIfPresent([Cell].self, forKey: .columns))??.map(\.text)
+        rows = (try? c.decodeIfPresent([Lossy<[Cell]>].self, forKey: .rows))??.compactMap { $0.value?.map(\.text) }
+        series = (try? c.decodeIfPresent([Lossy<ArtPt>].self, forKey: .series))??.compactMap(\.value)
+        text = (try? c.decodeIfPresent(String.self, forKey: .text)) ?? nil
+    }
 }
 struct SourceRow: Codable, Hashable, Sendable { let kind: String?; let name: String?; let symbol: String?; let logo: String?; var url: String? = nil }
 struct StreamEvent: Codable, Sendable { let type: String; let id: String?; let title: String?; let text: String?; let source: SourceRow?; let reply: ServerMsg?; let error: String? }
@@ -48,7 +133,7 @@ struct ConvRow: Codable, Identifiable, Hashable, Sendable {
     let id: String; let title: String?; let created: String?; let updated: String?; let agents: [String]?; let count: Int?; let last: String?; let brief: Bool?
 }
 struct ConvList: Codable, Sendable { let conversations: [ConvRow]? }
-struct ConvDoc: Codable, Sendable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
+struct ConvDoc: Codable, Sendable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool?; var mode: String? = nil }
 struct SendResult: Codable, Sendable { let id: String?; let title: String?; let agents: [String]?; let replies: [ServerMsg]?; let error: String? }
 
 /// What the phone keeps between launches, so the app opens on what you saw last instead of a
@@ -99,6 +184,9 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
     @Published var offline = false                // the last call could not reach the server
     @Published var retry: String? = nil           // a question that did not get an answer, to send again
     @Published var today: BookToday? = nil
+    /// How Koda answers in this conversation: "fast", "analyse" or "execute". Kept per conversation
+    /// on the phone and sent with every message; a server that does not know it just ignores it.
+    @Published var mode = "fast"
     /// The answer while it is being written. Its own object, not @Published here: every token used
     /// to change the model, and so re-render everything that watches it (the thread, the composer,
     /// the drawer's list) 30-60 times a second. Only LiveAnswer watches this.
@@ -186,6 +274,26 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
         conversationId = doc.id
         messages = doc.messages ?? []
         selected = Set(doc.agents ?? [])
+        mode = Self.savedModes[doc.id] ?? doc.mode.flatMap { m in Self.modes.contains { $0.id == m } ? m : nil } ?? "fast"
+    }
+
+    // ---- modes: one pill, one tap to the next ----
+    struct Mode { let id: String; let label: String; let icon: String; let hint: String }
+    static let modes = [Mode(id: "fast", label: "Hurtig", icon: "bolt", hint: "Kort svar med det samme"),
+                        Mode(id: "analyse", label: "Analyse", icon: "chart.bar.xaxis", hint: "Tænker sig om, regner og viser tabeller"),
+                        Mode(id: "execute", label: "Udfør", icon: "checklist", hint: "Gør det, trin for trin")]
+    static func modeInfo(_ id: String) -> Mode { modes.first { $0.id == id } ?? modes[0] }
+    private static var savedModes: [String: String] { UserDefaults.standard.dictionary(forKey: "modes") as? [String: String] ?? [:] }
+    func setMode(_ m: String) { mode = m; saveMode() }
+    func cycleMode() {
+        let i = Self.modes.firstIndex { $0.id == mode } ?? 0
+        setMode(Self.modes[(i + 1) % Self.modes.count].id)
+    }
+    private func saveMode() {
+        guard let id = conversationId else { return }
+        var d = Self.savedModes
+        if mode == "fast" { d[id] = nil } else { d[id] = mode }
+        UserDefaults.standard.set(d, forKey: "modes")
     }
     /// The open conversation, on disk, so it opens instantly next time.
     private func persist() {
@@ -204,7 +312,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
         show(doc); persist()
         if doc.pending == true { watch(g) }
     }
-    func newChat() { leave(); conversationId = nil; messages = []; selected = []; Disk.remove("last.json") }
+    func newChat() { leave(); conversationId = nil; messages = []; selected = []; mode = "fast"; Disk.remove("last.json") }
     /// Stop listening to the answer in flight. The server finishes it regardless; it is there
     /// when you come back to that conversation.
     private func leave() {
@@ -229,7 +337,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
         asked = body
         let g = gen
         Haptic.tap()
-        var payload: [String: Any] = ["message": body, "agents": Array(selected)]
+        var payload: [String: Any] = ["message": body, "agents": Array(selected), "mode": mode]
         var localImage: String? = nil
         if let image, let jpeg = image.tradsterJPEG() {
             payload["image"] = jpeg.base64EncodedString()
@@ -268,7 +376,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
                 error = p?.error ?? "Serveren svarede ikke (\(h.statusCode))"; retry = asked; Haptic.fail()
             } else if let p {
-                if let id = p.id { conversationId = id }
+                if let id = p.id { conversationId = id; saveMode() }
                 messages.append(contentsOf: p.replies ?? [])
                 Haptic.done()
                 persist()
@@ -301,13 +409,21 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let ev = try? JSONDecoder().decode(StreamEvent.self, from: Data(json.utf8)) else { continue }
                     switch ev.type {
-                    case "conv": if let id = ev.id { conversationId = id }
+                    case "conv": if let id = ev.id { conversationId = id; saveMode() }
                     case "status": live.status(StatusLine(text: ev.text ?? "", source: ev.source)); Haptic.pick()
+                    case "thinking": live.think(ev.text ?? "")
                     case "delta":
                         if !live.hasText { Haptic.soft() }
                         live.delta(ev.text ?? "")
                     case "done":
-                        if let r = ev.reply { messages.append(r); got = true }
+                        if var r = ev.reply {
+                            // The reasoning stays with the answer: the server's summary if it sent one,
+                            // otherwise what streamed; and how long it took, measured here.
+                            live.flush()
+                            if (r.thinking ?? "").isEmpty, !live.thinking.isEmpty { r.thinking = live.thinking }
+                            if r.thinking_s == nil, !(r.thinking ?? "").isEmpty, let sec = live.thinkSeconds { r.thinking_s = sec }
+                            messages.append(r); got = true
+                        }
                         live.reset()
                     case "error": error = ev.error ?? "Kunne ikke svare"; retry = asked; Haptic.fail()
                     default: break
@@ -645,6 +761,34 @@ struct ComposerView: View {
 
     private var canSend: Bool { (!box.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
 
+    /// Hurtig → Analyse → Udfør → Hurtig: one tap moves on, the pill says where you are. Hold it for
+    /// the three spelled out. Not a menu to learn.
+    private var modePill: some View {
+        let m = BookChatModel.modeInfo(model.mode)
+        return Button {
+            Haptic.pick()
+            withAnimation(.snappy(duration: 0.22)) { model.cycleMode() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: m.icon).font(.system(size: 12, weight: .semibold))
+                Text(m.label).font(.system(size: 14, weight: .medium)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(model.mode == "fast" ? Theme.text : Theme.accent)
+            .padding(.horizontal, 11).frame(height: 38)
+            .background(Theme.surface2, in: Capsule())
+            .overlay(Capsule().stroke(model.mode == "fast" ? Color.clear : Theme.accent.opacity(0.45), lineWidth: 1))
+            .contentTransition(.opacity)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            ForEach(BookChatModel.modes, id: \.id) { x in
+                Button { Haptic.pick(); model.setMode(x.id) } label: { Label("\(x.label) – \(x.hint)", systemImage: x.id == model.mode ? "checkmark" : x.icon) }
+            }
+        }
+        .accessibilityLabel("Svar: \(m.label)")
+        .accessibilityHint("Tryk for at skifte mellem Hurtig, Analyse og Udfør")
+    }
+
     /// Network trouble, said once and quietly above the composer, with a way to try again.
     private func quietLine(_ q: String) -> some View {
         HStack(spacing: 8) {
@@ -707,7 +851,8 @@ struct ComposerView: View {
                         .padding(.horizontal, 12).frame(height: 38).background(Theme.surface2, in: Capsule())
                     }
                     }
-                    Spacer()
+                    modePill
+                    Spacer(minLength: 0)
                     micButton
                     Button {
                         let t = box.draft, p = photo; box.draft = ""; photo = nil
@@ -886,7 +1031,10 @@ struct LiveAnswer: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            if text.isEmpty { Thinking(label: lines.isEmpty ? label : "") }
+            if live.thinkStarted != nil || !live.thinking.isEmpty {
+                ThoughtRow(text: live.thinking, seconds: live.thinkEnded == nil ? nil : live.thinkSeconds, thinking: live.thinkEnded == nil)
+            }
+            if text.isEmpty { if live.thinkStarted == nil { Thinking(label: lines.isEmpty ? label : "") } }
             else { AnswerText(text: text, keep: false) }
         }
         .animation(.easeOut(duration: 0.2), value: lines.count)
@@ -942,6 +1090,236 @@ struct LiveAnswer: View {
         if !text.isEmpty { text = "" }
         if !thinking.isEmpty { thinking = "" }
         if thinkEnded != nil { thinkEnded = nil }
+    }
+}
+
+// ---- how Koda got there: reasoning, steps, tables and charts --------------------------------
+
+/// Like the Claude app: one quiet line. While Koda thinks it says "Tænker…" with a light passing
+/// over it; afterwards "Tænkte i 12 s". Tap it to read the reasoning in small grey text.
+struct ThoughtRow: View {
+    let text: String
+    let seconds: Double?
+    let thinking: Bool
+    @State private var open = false
+    private var label: String {
+        if thinking { return "Tænker…" }
+        if let s = seconds { return "Tænkte i \(max(1, Int(s.rounded()))) s" }
+        return "Tænkte"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                guard !text.isEmpty else { return }
+                Haptic.pick()
+                withAnimation(.easeOut(duration: 0.2)) { open.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkle").font(.system(size: 11, weight: .semibold))
+                    if thinking { Text(label).modifier(Shimmer()) } else { Text(label) }
+                    if !text.isEmpty {
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                    }
+                }
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
+            .accessibilityHint(open ? "Skjul tankegangen" : "Vis tankegangen")
+            if open && !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 13)).foregroundStyle(Theme.secondary).lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 12)
+                    .overlay(alignment: .leading) { Capsule().fill(Theme.line).frame(width: 2) }
+                    .textSelection(.enabled)
+                    .transition(.opacity)
+            }
+        }
+    }
+}
+
+/// A light that passes over the text while it is live. Only on a view that exists while Koda is
+/// thinking, so the repeating animation stops with it.
+struct Shimmer: ViewModifier {
+    @State private var on = false
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                GeometryReader { g in
+                    LinearGradient(colors: [.clear, Theme.text.opacity(0.85), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: max(24, g.size.width * 0.5))
+                        .offset(x: on ? g.size.width : -max(24, g.size.width * 0.5))
+                }
+                .mask(content)
+                .allowsHitTesting(false)
+            }
+            .onAppear { withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) { on = true } }
+    }
+}
+
+/// What Udfør did, as a short checklist under the answer.
+struct StepList: View {
+    let steps: [Step]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { _, s in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: s.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 13)).foregroundStyle(s.failed ? Theme.down : Theme.up)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.title ?? "Trin").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text)
+                        if let d = s.detail, !d.isEmpty { Text(d).font(.system(size: 12)).foregroundStyle(Theme.secondary).monospacedDigit() }
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+}
+
+/// A table, a chart or a text from Analyse. Unknown kinds are left out.
+struct ArtifactView: View {
+    let a: Artifact
+    var body: some View {
+        switch a.kind {
+        case "table": if !(a.rows ?? []).isEmpty || !(a.columns ?? []).isEmpty { ArtifactTable(a: a) }
+        case "chart": if (a.series?.count ?? 0) > 1 { ArtifactChart(a: a) }
+        case "text": if let t = a.text, !t.isEmpty { box { AnswerText(text: t, size: 15).equatable() } }
+        default: EmptyView()
+        }
+    }
+    private func box<C: View>(@ViewBuilder _ c: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let t = a.title, !t.isEmpty { ArtifactTitle(t) }
+            c()
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+}
+
+struct ArtifactTitle: View {
+    let t: String
+    init(_ t: String) { self.t = t }
+    var body: some View { Text(t.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.secondary) }
+}
+
+/// Scrolls sideways when it is wide; numbers right-aligned in tabular digits. Long tables show
+/// the first 30 rows and a line to show the rest.
+struct ArtifactTable: View {
+    let a: Artifact
+    private let cols: [String]
+    private let rows: [[String]]
+    private let numeric: [Bool]
+    @State private var all = false
+    init(a: Artifact) {
+        self.a = a
+        let r = a.rows ?? []
+        let n = max(a.columns?.count ?? 0, r.map(\.count).max() ?? 0)
+        cols = (a.columns ?? []) + Array(repeating: "", count: max(0, n - (a.columns?.count ?? 0)))
+        rows = r.map { $0 + Array(repeating: "", count: max(0, n - $0.count)) }
+        numeric = (0..<n).map { i in
+            let vals = r.compactMap { i < $0.count ? $0[i] : nil }.filter { !$0.isEmpty }
+            guard !vals.isEmpty else { return false }
+            let nums = vals.filter { ArtifactTable.isNumber($0) }.count
+            return nums * 3 >= vals.count * 2
+        }
+    }
+    static func isNumber(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "kr", with: "")
+            .replacingOccurrences(of: "bp", with: "").replacingOccurrences(of: ",", with: ".").replacingOccurrences(of: "−", with: "-")
+            .replacingOccurrences(of: "+", with: "").trimmingCharacters(in: .whitespaces)
+        return Double(t) != nil
+    }
+    var body: some View {
+        let shown = all ? rows : Array(rows.prefix(30))
+        VStack(alignment: .leading, spacing: 8) {
+            if let t = a.title, !t.isEmpty { ArtifactTitle(t).padding(.horizontal, 12) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
+                    if cols.contains(where: { !$0.isEmpty }) {
+                        GridRow {
+                            ForEach(cols.indices, id: \.self) { i in
+                                Text(cols[i]).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary).lineLimit(1)
+                                    .gridColumnAlignment(numeric[i] ? .trailing : .leading)
+                            }
+                        }
+                        Rectangle().fill(Theme.line).frame(height: 1).gridCellUnsizedAxes(.horizontal)
+                    }
+                    ForEach(shown.indices, id: \.self) { r in
+                        GridRow {
+                            ForEach(shown[r].indices, id: \.self) { i in
+                                Text(shown[r][i]).font(.system(size: 13, weight: i == 0 ? .medium : .regular)).monospacedDigit()
+                                    .foregroundStyle(Theme.text).lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            if rows.count > 30 {
+                Button { Haptic.pick(); withAnimation(.easeOut(duration: 0.2)) { all.toggle() } } label: {
+                    Text(all ? "Vis færre" : "Vis alle \(rows.count) rækker").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain).padding(.horizontal, 12)
+            }
+        }
+        .padding(.vertical, 12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
+    }
+}
+
+/// A line with a soft fill, thinned and prepared once like the coin charts. Time on the x-axis when
+/// every point has one, otherwise just the order of the points.
+struct ArtifactChart: View {
+    let a: Artifact
+    private let timed: Bool
+    private let chart: ChartSeries
+    private let tint: Color
+    init(a: Artifact) {
+        self.a = a
+        let s = a.series ?? []
+        timed = s.allSatisfy { $0.t != nil }
+        let pts = s.enumerated().map { BookPt(t: timed ? ($0.element.t ?? 0) : Double($0.offset), c: $0.element.v) }
+        chart = ChartSeries(pts, limit: 160, pad: 0.08)
+        tint = (s.last?.v ?? 0) >= (s.first?.v ?? 0) ? Theme.up : Theme.down
+    }
+    var body: some View {
+        let fade = LinearGradient(colors: [tint.opacity(0.22), tint.opacity(0)], startPoint: .top, endPoint: .bottom)
+        let lo = chart.lo, hi = chart.hi, pad = chart.pad
+        VStack(alignment: .leading, spacing: 8) {
+            if let t = a.title, !t.isEmpty { ArtifactTitle(t) }
+            Group {
+                if timed {
+                    Chart(chart.points) { p in
+                        AreaMark(x: .value("t", p.t), yStart: .value("lo", lo - pad), yEnd: .value("v", p.c)).foregroundStyle(fade)
+                        LineMark(x: .value("t", p.t), y: .value("v", p.c)).foregroundStyle(tint).lineStyle(.init(lineWidth: 2, lineCap: .round))
+                    }
+                } else {
+                    Chart(chart.points) { p in
+                        AreaMark(x: .value("i", p.id), yStart: .value("lo", lo - pad), yEnd: .value("v", p.c)).foregroundStyle(fade)
+                        LineMark(x: .value("i", p.id), y: .value("v", p.c)).foregroundStyle(tint).lineStyle(.init(lineWidth: 2, lineCap: .round))
+                    }
+                    .chartXAxis(.hidden)
+                }
+            }
+            .chartYScale(domain: (lo - pad)...(hi + pad))
+            .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 9)).foregroundStyle(Theme.secondary) } }
+            .frame(height: 150)
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
     }
 }
 
@@ -1321,6 +1699,7 @@ struct BookBubble: View, Equatable {
                 if let f = m.from, m.agent != nil {
                     Text(f.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.accent)
                 }
+                if let th = m.thinking, !th.isEmpty { ThoughtRow(text: th, seconds: m.thinking_s, thinking: false) }
                 if let t = m.text, !t.isEmpty {
                     // Long-press: copy, share, or ask the same question again.
                     AnswerText(text: t).equatable()
@@ -1335,6 +1714,10 @@ struct BookBubble: View, Equatable {
                             AnswerText(text: String(t.prefix(700)) + (t.count > 700 ? " …" : ""))
                                 .padding(18).frame(width: 340).background(Theme.bg)
                         }
+                }
+                if let st = m.steps, !st.isEmpty { StepList(steps: st) }
+                if let arts = m.artifacts {
+                    ForEach(Array(arts.enumerated()), id: \.offset) { _, a in ArtifactView(a: a) }
                 }
                 if let cs = m.cards, !cs.isEmpty { CardStrip(cards: cs).padding(.top, 2).padding(.horizontal, -20) }
                 if let src = m.sources, !src.isEmpty { Sources(items: src) }
@@ -1906,6 +2289,8 @@ enum Tradster {
     static func kr(_ v: Double) -> String {
         krFormat.string(from: NSNumber(value: v.rounded())) ?? String(Int(v.rounded()))
     }
+    private static let dayOnly: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f }()
+    static func day(_ s: String) -> Date? { s.count == 10 ? dayOnly.date(from: s) : nil }
     /// The server's timestamps, with or without fractional seconds.
     static func date(_ s: String?) -> Date? {
         guard let s, !s.isEmpty else { return nil }
