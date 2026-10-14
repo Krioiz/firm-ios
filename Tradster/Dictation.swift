@@ -9,6 +9,7 @@ import AVFoundation
     @Published var text = ""
     @Published var listening = false
     @Published var level: CGFloat = 0          // 0...1, for the waveform
+    @Published var history: [CGFloat] = Array(repeating: 0, count: 44)   // the last few seconds, newest last
     @Published var denied = false
     private(set) var startedAt = Date()
 
@@ -49,7 +50,11 @@ import AVFoundation
             for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = n > 0 ? sqrt(sum / Float(n)) : 0
             let lv = CGFloat(min(1, rms * 12))
-            Task { @MainActor in self?.level = lv }
+            Task { @MainActor in
+                guard let self else { return }
+                self.level = lv
+                self.history.removeFirst(); self.history.append(lv)
+            }
         }
         engine.prepare()
         do { try engine.start() } catch { denied = true; return }
@@ -75,7 +80,7 @@ import AVFoundation
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         task?.cancel(); task = nil; request = nil
-        listening = false; level = 0
+        listening = false; level = 0; history = Array(repeating: 0, count: 44)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

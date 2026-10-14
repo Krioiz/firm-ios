@@ -257,6 +257,7 @@ struct BookChatView: View {
                     .lineLimit(1...6).focused($focused)
                     .font(.system(size: 17)).foregroundStyle(Theme.text).tint(Theme.accent)
                     .padding(.horizontal, 8).padding(.top, 6)
+                if dictation.listening { recordingRow } else {
                 HStack(spacing: 8) {
                     PhotosPicker(selection: $pick, matching: .images) {
                         Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
@@ -300,6 +301,7 @@ struct BookChatView: View {
                     }
                     .disabled(!canSend)
                 }
+                }
             }
             .padding(10)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -311,6 +313,29 @@ struct BookChatView: View {
 }
 
 extension BookChatView {
+    /// While listening the bottom row becomes: cancel, the voice as a line that only moves
+    /// when you speak, stop (keep the words to read over), send.
+    var recordingRow: some View {
+        HStack(spacing: 10) {
+            Button { _ = dictation.stop(); draft = "" } label: {
+                Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                    .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
+            }
+            WideWaveform(history: dictation.history).frame(height: 38)
+            Button { draft = dictation.stop() } label: {
+                Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.text)
+                    .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
+            }
+            Button {
+                let t = dictation.stop(); draft = ""
+                if !t.isEmpty { let p = photo; photo = nil; Task { await model.send(t, image: p) } }
+            } label: {
+                Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                    .frame(width: 38, height: 38).background(Theme.accent, in: Circle())
+            }
+        }
+    }
+
     /// Hold to talk: press, speak, release and it sends. A short tap starts dictation into the
     /// field instead, so you can read it over; tap again to stop.
     var micButton: some View {
@@ -342,6 +367,20 @@ extension BookChatView {
             }
         })
         .accessibilityLabel("Tal")
+    }
+}
+
+struct WideWaveform: View {
+    let history: [CGFloat]
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(Array(history.enumerated()), id: \.offset) { _, v in
+                Capsule().fill(Theme.text)
+                    .frame(width: 2.5, height: v < 0.03 ? 2 : 2 + 24 * min(1, v))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.linear(duration: 0.06), value: history)
     }
 }
 
