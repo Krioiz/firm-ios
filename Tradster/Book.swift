@@ -579,7 +579,7 @@ struct LiveAnswer: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
             if text.isEmpty { Thinking(label: lines.isEmpty ? label : "") }
-            else { Text(text).font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4) }
+            else { AnswerText(text: text) }
         }
         .animation(.easeOut(duration: 0.2), value: lines.count)
     }
@@ -903,11 +903,64 @@ struct BookBubble: View {
                 if let f = m.from, m.agent != nil {
                     Text(f.uppercased()).font(.system(size: 11, weight: .semibold)).kerning(0.8).foregroundStyle(Theme.accent)
                 }
-                Text(m.text ?? "").font(.system(size: 16.5)).foregroundStyle(Theme.text).lineSpacing(4).textSelection(.enabled)
+                AnswerText(text: m.text ?? "").textSelection(.enabled)
                 if let cs = m.cards, !cs.isEmpty { CardStrip(cards: cs).padding(.top, 2).padding(.horizontal, -20) }
                 if let src = m.sources, !src.isEmpty { Sources(items: src) }
             }.padding(.horizontal, 20)
         }
+    }
+}
+
+/// Answers in light markdown: **bold**, *italic*, `code` and links inline; bullet and numbered
+/// lines as a hanging list; short headings in the serif. Digits are tabular, so numbers line up.
+struct AnswerText: View {
+    let text: String
+    var size: CGFloat = 16.5
+    private enum Block { case para(String), bullet(String), numbered(String, String), heading(String) }
+    private var blocks: [Block] {
+        var out: [Block] = [], para: [String] = []
+        func flush() { if !para.isEmpty { out.append(.para(para.joined(separator: "\n"))); para = [] } }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { flush(); continue }
+            if let r = line.range(of: #"^[-*•]\s+"#, options: .regularExpression) {
+                flush(); out.append(.bullet(String(line[r.upperBound...])))
+            } else if let r = line.range(of: #"^\d{1,2}[.)]\s+"#, options: .regularExpression) {
+                flush(); out.append(.numbered(line[..<r.upperBound].trimmingCharacters(in: .whitespaces), String(line[r.upperBound...])))
+            } else if let r = line.range(of: #"^#{1,4}\s+"#, options: .regularExpression) {
+                flush(); out.append(.heading(String(line[r.upperBound...])))
+            } else { para.append(line) }
+        }
+        flush()
+        return out
+    }
+    static func inline(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
+                switch b {
+                case .para(let t):
+                    Text(Self.inline(t))
+                case .bullet(let t):
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text("•").foregroundStyle(Theme.secondary)
+                        Text(Self.inline(t))
+                    }.padding(.leading, 2)
+                case .numbered(let n, let t):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(n).foregroundStyle(Theme.secondary).frame(minWidth: 20, alignment: .trailing)
+                        Text(Self.inline(t))
+                    }
+                case .heading(let t):
+                    Text(Self.inline(t)).font(.system(size: size + 2, weight: .semibold, design: .serif)).padding(.top, 4)
+                }
+            }
+        }
+        .font(.system(size: size)).monospacedDigit()
+        .foregroundStyle(Theme.text).lineSpacing(4).tint(Theme.accent)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
