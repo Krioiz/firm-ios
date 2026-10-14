@@ -41,6 +41,34 @@ struct ConvList: Codable { let conversations: [ConvRow]? }
 struct ConvDoc: Codable { let id: String; let title: String?; let agents: [String]?; let messages: [ServerMsg]?; let pending: Bool? }
 struct SendResult: Codable { let id: String?; let title: String?; let agents: [String]?; let replies: [ServerMsg]?; let error: String? }
 
+/// What the phone keeps between launches, so the app opens on what you saw last instead of a
+/// spinner: the conversation list, the book's today, and every conversation you have opened.
+enum Disk {
+    static let dir: URL = {
+        let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tradster", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }()
+    static func save<T: Encodable>(_ v: T, _ name: String) {
+        if let d = try? JSONEncoder().encode(v) { try? d.write(to: dir.appendingPathComponent(name), options: .atomic) }
+    }
+    static func load<T: Decodable>(_ t: T.Type, _ name: String) -> T? {
+        guard let d = try? Data(contentsOf: dir.appendingPathComponent(name)) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: d)
+    }
+    static func remove(_ name: String) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(name)) }
+    /// Keep the newest `keep` conversations; the rest are on the server anyway.
+    static func prune(keep: Int = 40) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let convs = files.filter { $0.lastPathComponent.hasPrefix("conv-") }
+        guard convs.count > keep else { return }
+        let date = { (u: URL) in (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
+        for u in convs.sorted(by: { date($0) > date($1) }).dropFirst(keep) { try? fm.removeItem(at: u) }
+    }
+}
+struct LastOpen: Codable { let id: String; let at: Date }
+
 @MainActor final class BookChatModel: ObservableObject {
     @Published var messages: [ServerMsg] = []
     @Published var conversationId: String? = nil
@@ -48,14 +76,26 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
     @Published var agents: [AgentRow] = []
     @Published var selected: Set<String> = []
     @Published var sending = false
-    @Published var error: String? = nil
+    @Published var error: String? = nil           // one quiet line above the composer, never an alert
+    @Published var offline = false                // the last call could not reach the server
+    @Published var retry: String? = nil           // a question that did not get an answer, to send again
     @Published var today: BookToday? = nil
     // live, while an answer is on its way (streaming)
     @Published var statusLines: [StatusLine] = []
     @Published var streamText = ""
     var streaming: Bool { UserDefaults.standard.object(forKey: "stream") as? Bool ?? true }
+    /// What the line above the composer says, if anything.
+    var quiet: String? { error ?? (offline ? "Ingen forbindelse" : nil) }
 
     static let suggestions = ["Giv mig et dybdegående overblik over alt", "Hvad købte vi i dag?", "Hvordan står bogen lige nu?", "Hvad er lukket med gevinst?", "Hvad ligger der i noteringsbogen?", "Hvilket ben taber mest?"]
+
+    init() {
+        conversations = Disk.load([ConvRow].self, "conversations.json") ?? []
+        today = Disk.load(BookToday.self, "today.json")
+        // Back within the hour (iOS ended the app meanwhile): you are where you were.
+        if let l = Disk.load(LastOpen.self, "last.json"), Date().timeIntervalSince(l.at) < 3600,
+           let doc = Disk.load(ConvDoc.self, "conv-\(l.id).json") { show(doc) }
+    }
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval = 60) -> URLRequest {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/\(path)")!)
@@ -70,19 +110,39 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
         return r
     }
     private func fetch<T: Decodable>(_ path: String, _ type: T.Type) async -> T? {
-        guard let (d, _) = try? await URLSession.shared.data(for: request(path)) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: d)
+        do {
+            let (d, _) = try await URLSession.shared.data(for: request(path))
+            offline = false
+            return try? JSONDecoder().decode(T.self, from: d)
+        } catch {
+            if Self.isOffline(error) { offline = true }
+            return nil
+        }
+    }
+    static func isOffline(_ e: Error) -> Bool {
+        guard let u = e as? URLError else { return false }
+        let codes: [URLError.Code] = [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotFindHost, .cannotConnectToHost,
+                                      .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff, .secureConnectionFailed]
+        return codes.contains(u.code)
+    }
+    /// A failure, said quietly and in Danish.
+    private func say(_ e: Error) {
+        if Self.isOffline(e) { offline = true; error = nil } else { error = "Kunne ikke svare" }
     }
 
     func bootstrap() async {
         async let t: BookToday? = fetch("today", BookToday.self)
         async let a: AgentsPayload? = fetch("agents", AgentsPayload.self)
         async let c: ConvList? = fetch("conversations", ConvList.self)
-        today = await t
+        if let v = await t { today = v; Disk.save(v, "today.json") }
         if let v = await a?.agents { agents = v }
-        if let v = await c?.conversations { conversations = v }
+        if let v = await c?.conversations { conversations = v; Disk.save(v, "conversations.json") }
+        await resume()
     }
-    func refreshList() async { if let v = await fetch("conversations", ConvList.self)?.conversations { conversations = v } }
+    func refreshToday() async { if let v = await fetch("today", BookToday.self) { today = v; Disk.save(v, "today.json") } }
+    func refreshList() async {
+        if let v = await fetch("conversations", ConvList.self)?.conversations { conversations = v; Disk.save(v, "conversations.json") }
+    }
 
     var openCards: [BookCard] { (today?.cards ?? []).filter { $0.status == "open" } }
     var roomLabel: String {
@@ -95,25 +155,42 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
     // it touches anything, so a reply can never land in the conversation you switched to.
     private var gen = 0
     private var inflight: Task<Void, Never>? = nil
+    private var asked = ""
+
+    private func show(_ doc: ConvDoc) {
+        conversationId = doc.id
+        messages = doc.messages ?? []
+        selected = Set(doc.agents ?? [])
+    }
+    /// The open conversation, on disk, so it opens instantly next time.
+    private func persist() {
+        guard let id = conversationId, !messages.isEmpty else { return }
+        Disk.save(ConvDoc(id: id, title: nil, agents: Array(selected), messages: messages, pending: nil), "conv-\(id).json")
+        Disk.save(LastOpen(id: id, at: Date()), "last.json")
+        Disk.prune()
+    }
 
     func open(_ id: String) async {
         if id == conversationId, sending { return }          // already here, the answer is on its way
         leave()
         let g = gen
+        if let cached = Disk.load(ConvDoc.self, "conv-\(id).json") { show(cached) }   // at once, from disk
         guard let doc = await fetch("conversations/\(id)", ConvDoc.self), g == gen else { return }
-        conversationId = doc.id
-        messages = doc.messages ?? []
-        selected = Set(doc.agents ?? [])
+        show(doc); persist()
+        if doc.pending == true { watch(g) }
     }
-    func newChat() { leave(); conversationId = nil; messages = []; selected = [] }
+    func newChat() { leave(); conversationId = nil; messages = []; selected = []; Disk.remove("last.json") }
     /// Stop listening to the answer in flight. The server finishes it regardless; it is there
     /// when you come back to that conversation.
     private func leave() {
         gen += 1
         inflight?.cancel(); inflight = nil
         sending = false; statusLines = []; streamText = ""
+        error = nil; retry = nil
     }
     func delete(_ id: String) async {
+        withAnimation { conversations.removeAll { $0.id == id } }
+        Disk.remove("conv-\(id).json")
         _ = try? await URLSession.shared.data(for: request("conversations/\(id)", method: "DELETE"))
         if conversationId == id { newChat() }
         await refreshList()
@@ -123,6 +200,8 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty || image != nil, !sending else { return }
         sending = true
+        error = nil; retry = nil
+        asked = body
         let g = gen
         Haptic.tap()
         var payload: [String: Any] = ["message": body, "agents": Array(selected)]
@@ -142,38 +221,53 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
             if g == gen { inflight = nil }
         }
     }
+    /// "Prøv igen" on the quiet line: send the question that got no answer, or just reconnect.
+    func retryNow() {
+        error = nil
+        if let q = retry, !sending {
+            retry = nil
+            if let last = messages.last, last.role == "user", last.text == q { messages.removeLast() }
+            send(q)
+        } else {
+            Task { await bootstrap() }
+        }
+    }
 
     private func plain(_ payload: [String: Any], _ g: Int) async {
         do {
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
             guard g == gen else { return }
+            offline = false
             let p = try? JSONDecoder().decode(SendResult.self, from: d)
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
-                error = p?.error ?? "HTTP \(h.statusCode)"; Haptic.fail()
+                error = p?.error ?? "Serveren svarede ikke (\(h.statusCode))"; retry = asked; Haptic.fail()
             } else if let p {
                 if let id = p.id { conversationId = id }
                 messages.append(contentsOf: p.replies ?? [])
                 Haptic.done()
+                persist()
                 await refreshList()
             } else {
-                error = "Intet svar"
+                error = "Intet svar"; retry = asked
             }
         } catch {
             guard g == gen else { return }
-            if !Task.isCancelled { self.error = error.localizedDescription }
+            if !Task.isCancelled { say(error); retry = asked; Haptic.fail() }
         }
+        guard g == gen else { return }
         sending = false
     }
 
     /// The answer as it is written: status lines while Koda looks things up, then the text.
     private func stream(_ payload: [String: Any], _ g: Int) async {
         statusLines = []; streamText = ""
-        var got = false
+        var got = false, broke = false
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: request("conversations/\(conversationId ?? "new")/stream", method: "POST", body: payload, timeout: 300))
             guard g == gen else { return }
+            offline = false
             if let h = resp as? HTTPURLResponse, h.statusCode == 404 { await plain(payload, g); return }   // server without streaming yet
-            if let h = resp as? HTTPURLResponse, h.statusCode != 200 { error = "HTTP \(h.statusCode)"; Haptic.fail() }
+            if let h = resp as? HTTPURLResponse, h.statusCode != 200 { error = "Serveren svarede ikke (\(h.statusCode))"; retry = asked; Haptic.fail() }
             else {
                 for try await line in bytes.lines {
                     guard g == gen else { return }
@@ -189,28 +283,64 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
                     case "done":
                         if let r = ev.reply { messages.append(r); got = true }
                         streamText = ""; statusLines = []
-                    case "error": error = ev.error ?? "Fejl"; Haptic.fail()
+                    case "error": error = ev.error ?? "Kunne ikke svare"; retry = asked; Haptic.fail()
                     default: break
                     }
                 }
+                if !got && error == nil { broke = true }          // the line closed before the answer
             }
         } catch {
             guard g == gen else { return }
-            if !got, !Task.isCancelled { self.error = error.localizedDescription }
+            if !got, !Task.isCancelled { broke = true; if Self.isOffline(error) { offline = true } }
         }
         guard g == gen else { return }
-        if got { Haptic.done() }
+        if broke {
+            // The connection broke, not the answer: the server keeps writing. Fetch it from there.
+            statusLines = []; streamText = ""
+            await follow(g, question: asked)
+            guard g == gen else { return }
+        }
+        if got { Haptic.done(); offline = false }
         statusLines = []; streamText = ""
         sending = false
+        persist()
         await refreshList()
+    }
+
+    /// Poll the conversation until the answer is there or the server says it is not coming.
+    private func follow(_ g: Int, question: String?) async {
+        guard let id = conversationId else { if let question { retry = question; error = error ?? "Svaret kom ikke igennem" }; return }
+        let have = messages.count
+        for _ in 0..<60 {
+            guard g == gen else { return }
+            if let doc = await fetch("conversations/\(id)", ConvDoc.self) {
+                guard g == gen else { return }
+                let ms = doc.messages ?? []
+                if ms.count >= have, let last = ms.last, last.role != "user" { messages = ms; persist(); Haptic.done(); return }
+                if doc.pending != true { break }
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+        guard g == gen else { return }
+        if let question { retry = question; if !offline { error = error ?? "Svaret kom ikke igennem" } }
+    }
+    /// The server is still writing in this conversation (we left mid-answer): show it working.
+    private func watch(_ g: Int) {
+        guard !sending else { return }
+        sending = true
+        inflight = Task {
+            await follow(g, question: nil)
+            if g == gen { sending = false; inflight = nil }
+        }
     }
 
     /// Back from the background: pick up an answer that finished while we were away.
     func resume() async {
         guard let id = conversationId, !sending else { return }
-        if let doc = await fetch("conversations/\(id)", ConvDoc.self), (doc.messages?.count ?? 0) > messages.count {
-            messages = doc.messages ?? []
-        }
+        let g = gen
+        guard let doc = await fetch("conversations/\(id)", ConvDoc.self), g == gen, !sending else { return }
+        if (doc.messages?.count ?? 0) > messages.count { messages = doc.messages ?? []; persist() }
+        if doc.pending == true { watch(g) }
     }
 }
 
@@ -307,9 +437,6 @@ struct BookChatView: View {
         .alert("Mikrofon og tale", isPresented: $dictation.denied) {
             Button("OK", role: .cancel) {}
         } message: { Text("Giv Tradster adgang til mikrofon og talegenkendelse under Indstillinger → Tradster.") }
-        .alert("Kunne ikke svare", isPresented: .init(get: { model.error != nil }, set: { _ in model.error = nil })) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(model.error ?? "") }
     }
 
     private func setDrawer(_ open: Bool) {
@@ -438,8 +565,26 @@ struct BookChatView: View {
 
     private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
 
+    /// Network trouble, said once and quietly above the composer, with a way to try again.
+    private func quietLine(_ q: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: model.offline && model.error == nil ? "wifi.slash" : "exclamationmark.circle")
+                .font(.system(size: 11, weight: .semibold))
+            Text(q).font(.system(size: 13)).lineLimit(1)
+            if !model.sending {
+                Button { Haptic.tap(); model.retryNow() } label: {
+                    Text("Prøv igen").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .foregroundStyle(Theme.secondary)
+        .frame(maxWidth: .infinity).padding(.top, 6)
+        .transition(.opacity)
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            if let q = model.quiet { quietLine(q) }
             VStack(alignment: .leading, spacing: 8) {
                 if let photo {
                     ZStack(alignment: .topTrailing) {
@@ -504,6 +649,7 @@ struct BookChatView: View {
             .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
         }
         .background(Theme.bg)
+        .animation(.easeOut(duration: 0.2), value: model.quiet)
     }
 }
 
