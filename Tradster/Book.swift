@@ -91,23 +91,39 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
         return names.count > 2 ? "\(names[0]), \(names[1]) +\(names.count - 2)" : names.joined(separator: ", ")
     }
 
+    // Bumped whenever the screen changes conversation. An answer still on its way checks it before
+    // it touches anything, so a reply can never land in the conversation you switched to.
+    private var gen = 0
+    private var inflight: Task<Void, Never>? = nil
+
     func open(_ id: String) async {
-        guard let doc = await fetch("conversations/\(id)", ConvDoc.self) else { return }
+        if id == conversationId, sending { return }          // already here, the answer is on its way
+        leave()
+        let g = gen
+        guard let doc = await fetch("conversations/\(id)", ConvDoc.self), g == gen else { return }
         conversationId = doc.id
         messages = doc.messages ?? []
         selected = Set(doc.agents ?? [])
     }
-    func newChat() { conversationId = nil; messages = []; selected = [] }
+    func newChat() { leave(); conversationId = nil; messages = []; selected = [] }
+    /// Stop listening to the answer in flight. The server finishes it regardless; it is there
+    /// when you come back to that conversation.
+    private func leave() {
+        gen += 1
+        inflight?.cancel(); inflight = nil
+        sending = false; statusLines = []; streamText = ""
+    }
     func delete(_ id: String) async {
         _ = try? await URLSession.shared.data(for: request("conversations/\(id)", method: "DELETE"))
         if conversationId == id { newChat() }
         await refreshList()
     }
 
-    func send(_ text: String, image: UIImage? = nil) async {
+    func send(_ text: String, image: UIImage? = nil) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty || image != nil, !sending else { return }
         sending = true
+        let g = gen
         Haptic.tap()
         var payload: [String: Any] = ["message": body, "agents": Array(selected)]
         var localImage: String? = nil
@@ -116,16 +132,21 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
             try? jpeg.write(to: tmp); localImage = tmp.absoluteString
         }
-        messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter().string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage, sources: nil))
-        // iOS gives a backgrounded app ~30 s; the server finishes regardless and pushes if we are gone.
-        let bg = UIApplication.shared.beginBackgroundTask(withName: "koda") {}
-        defer { UIApplication.shared.endBackgroundTask(bg) }
-        if streaming { await stream(payload) } else { await plain(payload) }
+        messages.append(ServerMsg(role: "user", text: body, at: ISO8601DateFormatter.withFraction.string(from: Date()), from: nil, agent: nil, cards: nil, image: localImage, sources: nil))
+        let useStream = streaming
+        inflight = Task {
+            // iOS gives a backgrounded app ~30 s; the server finishes regardless and pushes if we are gone.
+            let bg = UIApplication.shared.beginBackgroundTask(withName: "koda") {}
+            defer { UIApplication.shared.endBackgroundTask(bg) }
+            if useStream { await stream(payload, g) } else { await plain(payload, g) }
+            if g == gen { inflight = nil }
+        }
     }
 
-    private func plain(_ payload: [String: Any]) async {
+    private func plain(_ payload: [String: Any], _ g: Int) async {
         do {
             let (d, resp) = try await URLSession.shared.data(for: request("conversations/\(conversationId ?? "new")/message", method: "POST", body: payload, timeout: 240))
+            guard g == gen else { return }
             let p = try? JSONDecoder().decode(SendResult.self, from: d)
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
                 error = p?.error ?? "HTTP \(h.statusCode)"; Haptic.fail()
@@ -138,21 +159,24 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
                 error = "Intet svar"
             }
         } catch {
-            self.error = error.localizedDescription
+            guard g == gen else { return }
+            if !Task.isCancelled { self.error = error.localizedDescription }
         }
         sending = false
     }
 
     /// The answer as it is written: status lines while Koda looks things up, then the text.
-    private func stream(_ payload: [String: Any]) async {
+    private func stream(_ payload: [String: Any], _ g: Int) async {
         statusLines = []; streamText = ""
         var got = false
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: request("conversations/\(conversationId ?? "new")/stream", method: "POST", body: payload, timeout: 300))
-            if let h = resp as? HTTPURLResponse, h.statusCode == 404 { await plain(payload); return }   // server without streaming yet
+            guard g == gen else { return }
+            if let h = resp as? HTTPURLResponse, h.statusCode == 404 { await plain(payload, g); return }   // server without streaming yet
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 { error = "HTTP \(h.statusCode)"; Haptic.fail() }
             else {
                 for try await line in bytes.lines {
+                    guard g == gen else { return }
                     guard line.hasPrefix("data:") else { continue }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let ev = try? JSONDecoder().decode(StreamEvent.self, from: Data(json.utf8)) else { continue }
@@ -171,8 +195,10 @@ struct SendResult: Codable { let id: String?; let title: String?; let agents: [S
                 }
             }
         } catch {
-            if !got { self.error = error.localizedDescription }
+            guard g == gen else { return }
+            if !got, !Task.isCancelled { self.error = error.localizedDescription }
         }
+        guard g == gen else { return }
         if got { Haptic.done() }
         statusLines = []; streamText = ""
         sending = false
@@ -221,20 +247,27 @@ struct BookChatView: View {
                 if model.messages.isEmpty { emptyState } else { thread }
                 composer
             }
-            .background(Theme.bg)
-            .clipShape(RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous))
-            .shadow(color: .black.opacity(0.5 * openAmount), radius: 24, x: -8, y: 0)
+            // The card's shape lives in its background, which runs to the screen's edges; the
+            // content stays inside the safe area, so nothing jumps when the drawer starts to open.
+            .background {
+                RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous).fill(Theme.bg)
+                    .shadow(color: .black.opacity(0.5 * openAmount), radius: 24, x: -8, y: 0)
+                    .ignoresSafeArea()
+            }
             .overlay {
                 if pageOffset > 0 {
-                    Color.black.opacity(0.25 * openAmount)
+                    RoundedRectangle(cornerRadius: 44 * openAmount, style: .continuous).fill(Color.black.opacity(0.25 * openAmount))
+                        .ignoresSafeArea()
                         .onTapGesture { setDrawer(false) }
+                        .accessibilityLabel("Luk menuen")
+                        .accessibilityAddTraits(.isButton)
                 }
             }
             .offset(x: pageOffset)
-            .ignoresSafeArea(edges: openAmount > 0 ? .vertical : [])
-            // The card follows the finger. From the left edge when closed, from anywhere when open;
-            // high priority so the scroll views and the text field inside do not swallow it.
-            .simultaneousGesture(DragGesture(minimumDistance: 14, coordinateSpace: .global)
+        }
+        // The card follows the finger: from the left edge when closed; from anywhere, the drawer
+        // included, when open. Simultaneous, and only when clearly sideways, so scrolling still scrolls.
+        .simultaneousGesture(DragGesture(minimumDistance: 14, coordinateSpace: .global)
                 .onChanged { g in
                     let dx = g.translation.width, dy = g.translation.height
                     guard abs(dx) > abs(dy) * 1.5 else { return }                 // a vertical swipe is a scroll
@@ -247,15 +280,14 @@ struct BookChatView: View {
                     let open: Bool
                     if !showHistory { open = g.startLocation.x < 60 && (drag > drawerWidth * 0.3 || predicted > drawerWidth * 0.5) }
                     else { open = !(drag < -drawerWidth * 0.2 || predicted < -drawerWidth * 0.5) }
-                    if open != showHistory { Haptic.soft() }
+                    if open != showHistory { Haptic.soft(); if open { Task { await model.refreshList() } } }
                     withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
                 })
-        }
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.bootstrap() }
         .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
-            if let q = n.userInfo?["q"] as? String { Task { await model.send(q) } }
+            if let q = n.userInfo?["q"] as? String { if model.sending { draft = q } else { model.send(q) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
@@ -280,24 +312,29 @@ struct BookChatView: View {
         } message: { Text(model.error ?? "") }
     }
 
-    private func setDrawer(_ open: Bool) { Haptic.soft(); if open { focused = false }; withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 } }
+    private func setDrawer(_ open: Bool) {
+        Haptic.soft()
+        if open { focused = false; Task { await model.refreshList() } }
+        withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) { showHistory = open; drag = 0 }
+    }
 
-    private func roundButton(_ system: String, _ action: @escaping () -> Void) -> some View {
+    private func roundButton(_ system: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
                 .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
         }
+        .accessibilityLabel(label)
     }
 
     private var topBar: some View {
         HStack {
-            roundButton("line.3.horizontal") { setDrawer(true) }
+            roundButton("line.3.horizontal", "Samtaler") { setDrawer(true) }
             Spacer()
             if !model.messages.isEmpty {
                 Text(model.roomLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.secondary)
                 Spacer()
             }
-            roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil") {
+            roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil", model.messages.isEmpty ? "Bogen lige nu" : "Ny samtale") {
                 focused = false; if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
             }
         }
@@ -370,7 +407,8 @@ struct BookChatView: View {
                 .scrollDismissesKeyboard(.immediately)
                 .onTapGesture { focused = false }
                 .onChange(of: model.messages.count) { old, new in
-                    guard new > old, let last = model.messages.last else { return }
+                    // Only for what you just asked and its answer; opening a conversation goes to the end.
+                    guard model.sending, new > old, let last = model.messages.last else { return }
                     if last.role == "user" {
                         withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .top) }   // your question to the top
                     } else if let q = model.messages.last(where: { $0.role == "user" }) {
@@ -378,12 +416,16 @@ struct BookChatView: View {
                     }
                 }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-                .onChange(of: model.conversationId) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: model.conversationId) { _, _ in
+                    // A new conversation gets its id mid-answer; scrolling then would hide the question.
+                    guard !model.sending else { return }
+                    DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
         }
     }
 
-    private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespaces).isEmpty || photo != nil) && !model.sending }
+    private var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photo != nil) && !model.sending }
 
     private var composer: some View {
         VStack(spacing: 0) {
@@ -394,7 +436,7 @@ struct BookChatView: View {
                         Button { self.photo = nil } label: {
                             Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.bg)
                                 .frame(width: 20, height: 20).background(Theme.text, in: Circle())
-                        }.offset(x: 6, y: -6)
+                        }.offset(x: 6, y: -6).accessibilityLabel("Fjern billedet")
                     }.padding(.leading, 6).padding(.top, 4)
                 }
                 TextField("", text: $draft, prompt: Text(model.messages.isEmpty ? (model.selected.isEmpty ? "Spørg Koda" : "Skriv til \(model.roomLabel)") : "Skriv videre").foregroundStyle(Theme.secondary), axis: .vertical)
@@ -407,6 +449,7 @@ struct BookChatView: View {
                         Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.text)
                             .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
                     }
+                    .accessibilityLabel("Vedhæft billede")
                     if !model.messages.isEmpty {
                         // The room is set when the conversation starts; mid-chat it is a label, not a choice.
                         HStack(spacing: 6) {
@@ -432,7 +475,7 @@ struct BookChatView: View {
                     micButton
                     Button {
                         let t = draft, p = photo; draft = ""; photo = nil
-                        Task { await model.send(t, image: p) }
+                        model.send(t, image: p)
                     } label: {
                         Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                             .foregroundStyle(canSend ? Theme.bg : Theme.secondary)
@@ -440,6 +483,7 @@ struct BookChatView: View {
                             .background(canSend ? Theme.text : Theme.surface2, in: Circle())
                     }
                     .disabled(!canSend)
+                    .accessibilityLabel("Send")
                 }
                 }
             }
@@ -461,18 +505,21 @@ extension BookChatView {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                     .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
             }
-            WideWaveform(history: dictation.history).frame(height: 38)
+            .accessibilityLabel("Annullér")
+            WideWaveform(history: dictation.history).frame(height: 38).accessibilityHidden(true)
             Button { draft = dictation.stop() } label: {
                 Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.text)
                     .frame(width: 38, height: 38).background(Theme.surface2, in: Circle())
             }
+            .accessibilityLabel("Stop og ret teksten")
             Button {
                 let t = dictation.stop(); draft = ""
-                if !t.isEmpty { let p = photo; photo = nil; Task { await model.send(t, image: p) } }
+                if !t.isEmpty { let p = photo; photo = nil; model.send(t, image: p) }
             } label: {
                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
                     .frame(width: 38, height: 38).background(Theme.accent, in: Circle())
             }
+            .accessibilityLabel("Send")
         }
     }
 
@@ -498,7 +545,7 @@ extension BookChatView {
                 pressStart = nil
                 if held {
                     let t = dictation.stop(); draft = ""
-                    if !t.isEmpty { let p = photo; photo = nil; Task { await model.send(t, image: p) } }
+                    if !t.isEmpty { let p = photo; photo = nil; model.send(t, image: p) }
                 } else if holdSend == false, dictation.listening, draft.isEmpty == false, Date().timeIntervalSince(dictation.startedAt) > 0.6 {
                     draft = dictation.stop()                 // second tap: stop, keep the text to edit
                 } else {
@@ -507,6 +554,7 @@ extension BookChatView {
             }
         })
         .accessibilityLabel("Tal")
+        .accessibilityHint("Hold inde og tal, slip for at sende")
     }
 }
 
@@ -667,6 +715,7 @@ struct HistoryView: View {
                             Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
                                 .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
                         }
+                        .accessibilityLabel("Luk søgning")
                     } else {
                         Text("Tradster").font(.system(size: 30, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
                         Spacer()
@@ -674,6 +723,7 @@ struct HistoryView: View {
                             Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.text)
                                 .frame(width: 44, height: 44).background(Theme.surface, in: Circle())
                         }
+                        .accessibilityLabel("Søg i samtaler")
                     }
                 }
                 .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 14)
@@ -687,7 +737,7 @@ struct HistoryView: View {
                             Text(title).font(.system(size: 15)).foregroundStyle(Theme.secondary)
                                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 6)
                             ForEach(list) { c in
-                                Button { Haptic.pick(); Task { await model.open(c.id); onClose() } } label: {
+                                Button { Haptic.pick(); onClose(); Task { await model.open(c.id) } } label: {
                                     HStack(spacing: 16) {
                                         Image(systemName: c.brief == true ? "sunrise" : ((c.agents ?? []).isEmpty ? "bubble.left" : "person.2"))
                                             .font(.system(size: 17)).foregroundStyle(Theme.secondary).frame(width: 24)
@@ -698,7 +748,7 @@ struct HistoryView: View {
                                     .background(c.id == model.conversationId ? Theme.surface : Color.clear)
                                 }
                                 .buttonStyle(.plain)
-                                .contextMenu { Button(role: .destructive) { Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
+                                .contextMenu { Button(role: .destructive) { Haptic.rigid(); Task { await model.delete(c.id) } } label: { Label("Slet", systemImage: "trash") } }
                             }
                         }
                         if rows.isEmpty {
@@ -715,6 +765,7 @@ struct HistoryView: View {
                     Circle().fill(Theme.surface2).frame(width: 46, height: 46)
                         .overlay(Text("M").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text))
                 }
+                .accessibilityLabel("Indstillinger")
                 Spacer()
                 Button { model.newChat(); onClose() } label: {
                     HStack(spacing: 8) {
@@ -1048,7 +1099,7 @@ struct LegDetail: View {
                 }.padding(20)
             }
             .background(Theme.bg)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.secondary).frame(width: 30, height: 30).background(Theme.surface2, in: Circle()) } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.secondary).frame(width: 30, height: 30).background(Theme.surface2, in: Circle()) }.accessibilityLabel("Luk") } }
         }
         .presentationDetents([.large]).presentationDragIndicator(.visible)
         .preferredColorScheme(.dark)
@@ -1222,7 +1273,7 @@ struct CoinCard: View {
                     RuleMark(y: .value("ind", e)).foregroundStyle(Theme.secondary.opacity(0.6)).lineStyle(.init(lineWidth: 1, dash: [3, 3]))
                         .annotation(position: .top, alignment: .leading) { Text("ind \(px(e))").font(.system(size: 9)).foregroundStyle(Theme.secondary) }
                     if let o = c.opened_at, let d = ISO8601DateFormatter().date(from: o) ?? ISO8601DateFormatter.withFraction.date(from: o) {
-                        RuleMark(x: .value("aabnet", d)).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
+                        RuleMark(x: .value("åbnet", d)).foregroundStyle(Theme.secondary.opacity(0.35)).lineStyle(.init(lineWidth: 1))
                     }
                 }
                 .chartYScale(domain: (lo - pad)...(hi + pad))
