@@ -48,6 +48,8 @@ targets:
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
         NSFaceIDUsageDescription: Unlock The Firm with Face ID.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # App Store validation (409, 14 Oct 2026): portrait-only is only allowed with full screen.
+        UIRequiresFullScreen: true
         CFBundleURLTypes:
           - CFBundleURLName: com.getstubbie.firm
             CFBundleURLSchemes: [firm]
@@ -72,6 +74,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # App Store validation (409, 14 Oct 2026): portrait-only is only allowed with full screen.
+        UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
@@ -94,6 +98,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # App Store validation (409, 14 Oct 2026): portrait-only is only allowed with full screen.
+        UIRequiresFullScreen: true
         NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
         ITSAppUsesNonExemptEncryption: false
     settings:
