@@ -46,7 +46,12 @@ struct TradsterRoot: View {
 /// Three places, switched by a glass pill at the top (no tab bar: it fought the Claude-like design).
 /// Hidden inside a conversation, where the top bar shows the room instead. One BookChatModel for all.
 struct TradsterTabs: View {
-    enum Place: String, Hashable, CaseIterable { case koda = "Koda", bog = "Bogen", inspiration = "Inspiration" }
+    enum Place: String, Hashable, CaseIterable {
+        case koda = "Koda", bog = "Bogen", inspiration = "Inspiration", penge = "Penge"
+        var icon: String {
+            switch self { case .koda: "bubble.left"; case .bog: "chart.line.uptrend.xyaxis"; case .inspiration: "sparkles"; case .penge: "creditcard" }
+        }
+    }
     @StateObject private var model = BookChatModel()
     @State private var place: Place = .koda
     @Namespace private var pill
@@ -59,6 +64,7 @@ struct TradsterTabs: View {
                 case .koda: NavigationStack { BookChatView(model: model) }
                 case .bog: BookSheet(model: model, asTab: true)
                 case .inspiration: InspirationView()
+                case .penge: EconomyView()
                 }
             }
             .transition(.opacity)
@@ -82,15 +88,21 @@ struct TradsterTabs: View {
                     guard p != place else { return }
                     Haptic.tap(); Keyboard.hide(); place = p
                 } label: {
-                    Text(p.rawValue).font(.system(size: 14, weight: .semibold))
+                    // Four places do not fit as words between the two round buttons: the chosen one
+                    // shows its name, the others only their icon.
+                    HStack(spacing: 5) {
+                        Image(systemName: p.icon).font(.system(size: 13, weight: .semibold))
+                        if p == place { Text(p.rawValue).font(.system(size: 14, weight: .semibold)).lineLimit(1).fixedSize() }
+                    }
                         .foregroundStyle(p == place ? Theme.bg : Theme.text.opacity(0.85))
-                        .padding(.horizontal, 13).frame(height: 34)
+                        .padding(.horizontal, p == place ? 13 : 11).frame(height: 34)
                         .background {
                             if p == place { Capsule().fill(Theme.text).matchedGeometryEffect(id: "sel", in: pill) }
                         }
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(p.rawValue)
                 .accessibilityAddTraits(p == place ? .isSelected : [])
             }
         }
