@@ -80,10 +80,14 @@ struct InspirationView: View {
                         Text(model.items.isEmpty ? "Researcheren har ikke skrevet noget endnu. Træk ned for at hente." : "Intet i denne kategori lige nu.")
                             .font(.system(size: 15)).foregroundStyle(Theme.secondary).padding(.top, 30)
                     }
-                    ForEach(shown) { it in
-                        InspoCard(it: it, open: open == it.id) {
-                            Haptic.tap()
-                            withAnimation(.snappy(duration: 0.3)) { open = open == it.id ? nil : it.id }
+                    ForEach(groups, id: \.0) { g in
+                        Text(g.0).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
+                            .textCase(.uppercase).kerning(0.6).padding(.top, 10)
+                        ForEach(g.1) { it in
+                            InspoCard(it: it, open: open == it.id) {
+                                Haptic.tap()
+                                withAnimation(.snappy(duration: 0.3)) { open = open == it.id ? nil : it.id }
+                            }
                         }
                     }
                     Text("Kun information. Ingen anbefaling om køb eller salg.")
@@ -97,6 +101,28 @@ struct InspirationView: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Soonest first, in plain groups, so the page reads as a calendar.
+    private var groups: [(String, [InspoItem])] {
+        let cal = Calendar.current, today = cal.startOfDay(for: Date())
+        func days(_ it: InspoItem) -> Int? {
+            guard let s = it.date, let d = Tradster.day(s) else { return nil }
+            return cal.dateComponents([.day], from: today, to: d).day
+        }
+        var now: [InspoItem] = [], soon: [InspoItem] = [], done: [InspoItem] = [], talk: [InspoItem] = []
+        for it in shown {
+            if it.status == "rygte" { talk.append(it); continue }
+            switch days(it) {
+            case .some(let d) where d >= 0 && d <= 1: now.append(it)
+            case .some(let d) where d > 1: soon.append(it)
+            case .some: done.append(it)
+            case .none: if it.status == "kommende" { soon.append(it) } else { done.append(it) }
+            }
+        }
+        soon.sort { (days($0) ?? 999) < (days($1) ?? 999) }
+        done.sort { (days($0) ?? -999) > (days($1) ?? -999) }
+        return [("I dag og i morgen", now), ("Snart", soon), ("Allerede på markedet", done), ("Planer og rygter", talk)].filter { !$0.1.isEmpty }
     }
 
     private var subtitle: String {
@@ -132,53 +158,54 @@ struct InspirationView: View {
 struct InspoCard: View {
     let it: InspoItem; let open: Bool; let toggle: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                CachedImage(url: it.logo, px: 120) {
-                    RoundedRectangle(cornerRadius: 10).fill(Theme.surface2)
-                        .overlay(Text(String((it.ticker ?? it.name ?? "?").prefix(2))).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.secondary))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                CachedImage(url: it.logo, px: 132) {
+                    RoundedRectangle(cornerRadius: 11).fill(Theme.surface2)
+                        .overlay(Text(String((it.ticker ?? it.name ?? "?").prefix(2))).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.secondary))
                 }
-                .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(it.name ?? it.ticker ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                        if let t = it.ticker, t != it.name { Text(t).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.secondary) }
-                    }
-                    Text([it.venue, kindLabel].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
+                    Text(it.name ?? it.ticker ?? "").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    Text([kindLabel, it.venue].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 13)).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 dateBadge
             }
-            if let h = it.headline { Text(h).font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.text) }
-            if let s = it.score { scoreDots(s) }
+            if let h = it.headline {
+                Text(h).font(.system(size: 17)).foregroundStyle(Theme.text).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            }
             if open {
-                if let w = it.why { Text(w).font(.system(size: 15)).foregroundStyle(Theme.text.opacity(0.92)).fixedSize(horizontal: false, vertical: true) }
+                if let w = it.why { section("Hvad er det?") { para(w) } }
                 if let n = it.numbers, !n.isEmpty {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], alignment: .leading, spacing: 8) {
-                        ForEach(n, id: \.self) { x in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(x.label ?? "").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
-                                Text(x.value ?? "–").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).monospacedDigit()
+                    section("Tallene") {
+                        VStack(spacing: 0) {
+                            ForEach(Array(n.enumerated()), id: \.offset) { i, x in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(x.label ?? "").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                                    Spacer(minLength: 12)
+                                    Text(x.value ?? "–").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                                        .monospacedDigit().multilineTextAlignment(.trailing)
+                                }
+                                .padding(.vertical, 9)
+                                if i < n.count - 1 { Divider().overlay(Theme.line) }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10).background(Theme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
+                        .padding(.horizontal, 12)
+                        .background(Theme.surface2.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
-                if let r = it.risk {
-                    Label { Text(r) } icon: { Image(systemName: "exclamationmark.triangle") }
-                        .font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                }
-                if let t = it.tradable_for_us {
-                    Label { Text(t) } icon: { Image(systemName: "building.columns") }
-                        .font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                }
+                if let r = it.risk { section("Hvad kan gå galt?") { para(r) } }
+                if let t = it.tradable_for_us { section("Kan vi handle den?") { para(t) } }
                 if let src = it.sources, !src.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(src, id: \.self) { s in
-                            if let u = s.url, let url = URL(string: u) {
-                                Link(destination: url) {
-                                    Label(s.title ?? url.host() ?? u, systemImage: "link").font(.system(size: 13)).foregroundStyle(Theme.accent).lineLimit(1)
+                    section("Kilder") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(src, id: \.self) { s in
+                                if let u = s.url, let url = URL(string: u) {
+                                    Link(destination: url) {
+                                        Label(s.title ?? url.host() ?? u, systemImage: "arrow.up.right.square")
+                                            .font(.system(size: 14)).foregroundStyle(Theme.accent).lineLimit(2).multilineTextAlignment(.leading)
+                                    }
                                 }
                             }
                         }
@@ -193,14 +220,29 @@ struct InspoCard: View {
                         .padding(.horizontal, 16).padding(.vertical, 10).modifier(Glass(interactive: true))
                 }
                 .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 4) {
+                    Text("Læs mere"); Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+                }
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.secondary)
             }
         }
-        .padding(16)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(18)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
         .accessibilityElement(children: open ? .contain : .combine)
-        .accessibilityHint(open ? "" : "Vis analysen")
+        .accessibilityHint(open ? "" : "Vis mere")
+    }
+
+    private func section<C: View>(_ title: String, @ViewBuilder _ c: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
+            c()
+        }
+    }
+    private func para(_ t: String) -> some View {
+        Text(t).font(.system(size: 16)).foregroundStyle(Theme.text.opacity(0.94)).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
     }
 
     private var kindLabel: String? {
@@ -227,11 +269,5 @@ struct InspoCard: View {
             return (f.string(from: d), false)
         }
     }
-    private func scoreDots(_ s: Int) -> some View {
-        HStack(spacing: 4) {
-            ForEach(1...5, id: \.self) { i in Circle().fill(i <= s ? Theme.accent : Theme.surface2).frame(width: 6, height: 6) }
-            Text("interessant").font(.system(size: 11)).foregroundStyle(Theme.secondary).padding(.leading, 4)
-        }
-        .accessibilityElement().accessibilityLabel("Interessant \(s) af 5")
-    }
+
 }

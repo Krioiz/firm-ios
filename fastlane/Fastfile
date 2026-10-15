@@ -13,7 +13,8 @@ def prepare(type, ids = nil)
   existing = Spaceship::ConnectAPI::BundleId.all.map(&:identifier)
   ids.each do |bid|
     next if existing.include?(bid)
-    nice = if bid.end_with?("widget") then "The Firm Widget"
+    nice = if bid.end_with?("tradster.widget") then "Tradster Widget"
+           elsif bid.end_with?("widget") then "The Firm Widget"
            elsif bid.end_with?("sizer") then "Max Sizer"
            elsif bid.end_with?("tradster") then "Tradster"
            else "The Firm" end
@@ -158,7 +159,7 @@ platform :ios do
 
   # ---- Tradster --------------------------------------------------------------------------
   # The trading book as a chat. Its own app by Marco's call, same project, same signing path.
-  TRADSTER_IDS = ["com.getstubbie.tradster"]
+  TRADSTER_IDS = ["com.getstubbie.tradster", "com.getstubbie.tradster.widget"]
 
   desc "Tradster — development build, installable on registered devices"
   lane :tradster_device do

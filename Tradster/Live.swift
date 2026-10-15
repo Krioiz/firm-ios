@@ -46,6 +46,7 @@ struct LiveSnap: Codable, Sendable {
         for l in s.legs ?? [] { if let o = old[l.id], let n = l.bp, abs(n - o) >= 0.5 { m[l.id] = n > o ? 1 : -1 } }
         if let o = snap?.total?.now, let n = s.total?.now, abs(n - o) >= 0.05 { m["total"] = n > o ? 1 : -1 }
         withAnimation(.snappy(duration: 0.35)) { snap = s; moved = m }
+        BasketActivity.update(s)
         if !m.isEmpty {
             try? await Task.sleep(for: .milliseconds(700))
             withAnimation(.easeOut(duration: 0.6)) { moved = [:] }
@@ -121,6 +122,7 @@ struct LiveBasket: View {
                         .font(.system(size: 13)).foregroundStyle(Theme.secondary).monospacedDigit()
                     }
                 }
+                if s.books?["kraken-1h"]?.net_kr != nil { FollowButton(snap: s) }
                 let legs = (s.legs ?? []).sorted { ($0.bp ?? -1e9) > ($1.bp ?? -1e9) }
                 VStack(spacing: 0) {
                     ForEach(legs) { l in LiveLegRow(l: l, card: logos[l.symbol ?? ""], flash: live.moved[l.id]) }
@@ -151,5 +153,24 @@ struct LiveLegRow: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Følg på låseskærmen": the basket as a Live Activity, kept ticking by the server.
+struct FollowButton: View {
+    let snap: LiveSnap
+    @State private var on = BasketActivity.current != nil
+    var body: some View {
+        Button {
+            Haptic.tap()
+            if on { BasketActivity.stop() } else { BasketActivity.start(snap) }
+            withAnimation(.snappy) { on = BasketActivity.current != nil || !on }
+        } label: {
+            Label(on ? "Følges på låseskærmen" : "Følg på låseskærmen", systemImage: on ? "checkmark.circle.fill" : "lock.iphone")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(on ? Theme.up : Theme.text)
+                .padding(.horizontal, 14).padding(.vertical, 9).modifier(Glass(interactive: true))
+        }
+        .buttonStyle(.plain)
+        .disabled(!BasketActivity.enabled && !on)
     }
 }

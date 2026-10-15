@@ -90,6 +90,9 @@ targets:
     type: application
     platform: iOS
     sources: [Tradster]
+    dependencies:
+      - target: TradsterWidget
+        embed: true
     info:
       path: Tradster/Info.plist
       properties:
@@ -104,6 +107,8 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: Hold mikrofonen inde og tal til bogen.
         NSSpeechRecognitionUsageDescription: Det du siger bliver til tekst, som sendes til bogen.
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.tradster
@@ -111,6 +116,29 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Tradster/Tradster.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "1.0"
+
+  # The Live Activity (lock screen + Dynamic Island) for the open basket. Updated by the server over APNs.
+  TradsterWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TradsterWidget
+      - path: Tradster/BasketActivity.swift
+    info:
+      path: TradsterWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Tradster
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.tradster.widget
+        PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.tradster.widget"
+        CODE_SIGN_ENTITLEMENTS: TradsterWidget/TradsterWidget.entitlements
+        MARKETING_VERSION: "1.0"
+        SKIP_INSTALL: true
 
   FirmWidget:
     type: app-extension

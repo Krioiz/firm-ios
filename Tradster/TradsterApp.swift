@@ -27,7 +27,7 @@ struct TradsterRoot: View {
                 PairingView(code: code, checking: checking, paired: paired) { await check() }
             }
         }
-        .task { await check() }
+        .task { BasketActivity.observe(); await check() }
     }
 
     /// The phone proves itself with its Keychain secret; the first time, the server hands back a
