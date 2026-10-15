@@ -1622,6 +1622,7 @@ struct BookSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
+                    LabSection().padding(.bottom, 6)
                     LiveBasket(logos: Dictionary(model.openCards.compactMap { c in c.symbol.map { ($0, c) } }, uniquingKeysWith: { a, _ in a }))
                         .padding(.bottom, 8)
                     if let h = model.today?.headline { Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(.bottom, 4) }
@@ -1632,7 +1633,7 @@ struct BookSheet: View {
             .background(Theme.bg)
             .navigationTitle("Bogen lige nu").navigationBarTitleDisplayMode(.inline)
             .toolbar { if !asTab { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } } }
-            .refreshable { await model.bootstrap(); await LiveBook.shared.refresh() }
+            .refreshable { await model.bootstrap(); await LiveBook.shared.refresh(); await ProposalModel.shared.load() }
             .task { await LiveBook.shared.run() }
         }
         .preferredColorScheme(.dark)
