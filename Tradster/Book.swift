@@ -587,26 +587,6 @@ struct BookChatView: View {
         }
     }
 
-    private func equityLine(_ now: Double, _ start: Double) -> some View {
-        let diff = now - start, pct = start > 0 ? diff / start * 100 : 0
-        let col = diff >= 0 ? Theme.up : Theme.down
-        return HStack(spacing: 8) {
-            Text("\(Tradster.kr(now)) kr").foregroundStyle(Theme.text)
-            Text("\(diff >= 0 ? "+" : "−")\(Tradster.kr(abs(diff))) kr · \(String(format: "%@%.1f", pct >= 0 ? "+" : "−", abs(pct)).replacingOccurrences(of: ".", with: ",")) %")
-                .foregroundStyle(col)
-            if let stale = staleTime { Text("· \(stale)").foregroundStyle(Theme.secondary) }
-        }
-        .font(.system(size: 14, weight: .medium)).monospacedDigit()
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("Åbner bogen")
-    }
-    /// Only when the numbers are not fresh (from disk, or no signal): when they are from.
-    private var staleTime: String? {
-        guard let a = model.today?.at, let d = Tradster.date(a),
-              Date().timeIntervalSince(d) > 15 * 60 else { return nil }
-        return Tradster.when(a)
-    }
-
     /// Empty screen, but pull it down and the book and the list are fetched again.
     private var emptyState: some View {
         GeometryReader { geo in
@@ -626,8 +606,8 @@ struct BookChatView: View {
                 .font(.system(size: 30, weight: .regular, design: .serif))
                 .foregroundStyle(Theme.text).multilineTextAlignment(.center).padding(.horizontal, 28)
             // The book in one line: what the paper is worth and how far from the start, then the day.
-            if let t = model.today?.total {
-                Button { Haptic.tap(); showBook = true } label: { equityLine(t.now, t.start) }
+            if model.today?.total != nil || LiveBook.shared.snap != nil {
+                Button { Haptic.tap(); showBook = true } label: { LiveEquityLine(fallback: model.today?.total) }
                     .buttonStyle(.plain).padding(.top, 14)
             }
             if let h = model.today?.headline {
@@ -661,6 +641,7 @@ struct BookChatView: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { Keyboard.hide() }
+        .task { await LiveBook.shared.run() }      // ticks only while the greeting is on screen
     }
 }
 
@@ -1642,6 +1623,8 @@ struct BookSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
+                    LiveBasket(logos: Dictionary(model.openCards.compactMap { c in c.symbol.map { ($0, c) } }, uniquingKeysWith: { a, _ in a }))
+                        .padding(.bottom, 8)
                     if let h = model.today?.headline { Text(h).font(.system(size: 14)).foregroundStyle(Theme.secondary).padding(.bottom, 4) }
                     if !model.openCards.isEmpty { CardStrip(cards: model.openCards).padding(.horizontal, -20) }
                     if model.openCards.isEmpty { Text("Bogen er flad.").foregroundStyle(Theme.secondary) }
@@ -1650,7 +1633,8 @@ struct BookSheet: View {
             .background(Theme.bg)
             .navigationTitle("Bogen lige nu").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } }
-            .refreshable { await model.bootstrap() }
+            .refreshable { await model.bootstrap(); await LiveBook.shared.refresh() }
+            .task { await LiveBook.shared.run() }
         }
         .preferredColorScheme(.dark)
     }
