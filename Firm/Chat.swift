@@ -82,18 +82,6 @@ struct ChatsView: View {
     }
     private var agentList: some View {
         List {
-            // The book is not an agent: plain code answers from the paper books on disk, and the
-            // firm's own model puts it into words. It sits first because it is what he asks most.
-            NavigationLink(value: BookRef()) {
-                HStack(spacing: 12) {
-                    Image(systemName: "book.closed.fill").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 40, height: 40).background(Color.indigo, in: Circle())
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Bogen").font(.system(size: 17, weight: .medium))
-                        Text("Hvad købte vi i dag? Kurser, logoer, grafer.").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                }.padding(.vertical, 3)
-            }
             ForEach(chats) { c in
                 if let agent = store.agents.first(where: { $0.id == c.agent }) {
                     NavigationLink(value: Conversation(agent: agent)) {
