@@ -74,6 +74,7 @@ struct InspirationView: View {
                         Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.secondary)
                     }
                     .padding(.top, 8)
+                    WatchStrip()
                     chips
                     if model.loading { ForEach(0..<3, id: \.self) { _ in placeholder } }
                     else if shown.isEmpty {
@@ -96,8 +97,8 @@ struct InspirationView: View {
                 .padding(.horizontal, 16)
             }
             .background(Theme.bg)
-            .refreshable { await model.load() }
-            .task { await model.load() }
+            .refreshable { async let a: Void = model.load(); async let b: Void = WatchModel.shared.load(); _ = await (a, b) }
+            .task { async let a: Void = model.load(); async let b: Void = WatchModel.shared.load(); _ = await (a, b) }
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
@@ -211,6 +212,8 @@ struct InspoCard: View {
                         }
                     }
                 }
+                HStack(spacing: 10) {
+                FollowStar(it: it)
                 Button {
                     Haptic.tap()
                     let q = "Fortæl mig om \(it.name ?? it.ticker ?? "den") \(it.ticker.map { "(\($0))" } ?? ""): hvad er historien, og hvad skal man holde øje med?"
@@ -220,6 +223,7 @@ struct InspoCard: View {
                         .padding(.horizontal, 16).padding(.vertical, 10).modifier(Glass(interactive: true))
                 }
                 .buttonStyle(.plain)
+                }
             } else {
                 HStack(spacing: 4) {
                     Text("Læs mere"); Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
