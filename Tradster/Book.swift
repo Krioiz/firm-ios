@@ -536,7 +536,6 @@ struct BookChatView: View {
                 })
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
-        .toolbar(model.messages.isEmpty ? .visible : .hidden, for: .tabBar)   // a conversation gets the whole screen
         .task { await model.bootstrap() }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
@@ -569,9 +568,9 @@ struct BookChatView: View {
                 Text(model.roomLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.secondary)
                 Spacer()
             }
-            roundButton(model.messages.isEmpty ? "book.closed" : "square.and.pencil", model.messages.isEmpty ? "Bogen lige nu" : "Ny samtale") {
-                Keyboard.hide(); if model.messages.isEmpty { showBook = true } else { withAnimation { model.newChat() } }
-            }
+            // On the empty screen the top pill sits between the two sides; the book is in the pill now.
+            if model.messages.isEmpty { Color.clear.frame(width: 44, height: 44) }
+            else { roundButton("square.and.pencil", "Ny samtale") { Keyboard.hide(); withAnimation { model.newChat() } } }
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 4)
     }
@@ -1631,7 +1630,9 @@ struct BookSheet: View {
                 }.padding(16)
             }
             .background(Theme.bg)
-            .navigationTitle("Bogen lige nu").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(asTab ? "" : "Bogen lige nu").navigationBarTitleDisplayMode(.inline)
+            .toolbar(asTab ? .hidden : .visible, for: .navigationBar)
+            .safeAreaInset(edge: .top) { if asTab { Color.clear.frame(height: 50) } }   // room for the top pill
             .toolbar { if !asTab { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } } }
             .refreshable { await model.bootstrap(); await LiveBook.shared.refresh(); await ProposalModel.shared.load() }
             .task { await LiveBook.shared.run() }

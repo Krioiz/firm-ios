@@ -73,7 +73,7 @@ struct InspirationView: View {
                         Text("Inspiration").font(.system(size: 34, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
                         Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.secondary)
                     }
-                    .padding(.top, 8)
+                    .padding(.top, 58)   // under the top pill
                     WatchStrip()
                     chips
                     if model.loading { ForEach(0..<3, id: \.self) { _ in placeholder } }

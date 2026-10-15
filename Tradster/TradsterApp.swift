@@ -43,36 +43,60 @@ struct TradsterRoot: View {
     }
 }
 
-/// Three places along the bottom, on Liquid Glass (iOS 26 draws the bar itself; iOS 18 gets the
-/// classic bar): Koda, the book live, and Inspiration. One BookChatModel for all of them.
+/// Three places, switched by a glass pill at the top (no tab bar: it fought the Claude-like design).
+/// Hidden inside a conversation, where the top bar shows the room instead. One BookChatModel for all.
 struct TradsterTabs: View {
-    enum Place: Hashable { case koda, bog, inspiration }
+    enum Place: String, Hashable, CaseIterable { case koda = "Koda", bog = "Bogen", inspiration = "Inspiration" }
     @StateObject private var model = BookChatModel()
     @State private var place: Place = .koda
+    @Namespace private var pill
+
     var body: some View {
-        tabs
-            .tint(Theme.text)
-            // "Spørg Koda" from anywhere lands in the chat.
-            // Handled here, not in the chat: a tab that is not on screen may not be listening.
-            .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
-                if place != .koda { withAnimation(.snappy) { place = .koda } }
-                if let q = n.userInfo?["q"] as? String, !model.sending { model.send(q) }
+        ZStack(alignment: .top) {
+            Theme.bg.ignoresSafeArea()
+            Group {
+                switch place {
+                case .koda: NavigationStack { BookChatView(model: model) }
+                case .bog: BookSheet(model: model, asTab: true)
+                case .inspiration: InspirationView()
+                }
             }
-            .onChange(of: place) { _, _ in Haptic.tap() }
-    }
-    @ViewBuilder private var tabs: some View {
-        let t = TabView(selection: $place) {
-            Tab("Koda", systemImage: "bubble.left.and.text.bubble.right", value: Place.koda) {
-                NavigationStack { BookChatView(model: model) }
-            }
-            Tab("Bogen", systemImage: "chart.line.uptrend.xyaxis", value: Place.bog) {
-                BookSheet(model: model, asTab: true)
-            }
-            Tab("Inspiration", systemImage: "sparkles", value: Place.inspiration) {
-                InspirationView()
+            .transition(.opacity)
+            if place != .koda || model.messages.isEmpty {
+                switcher.padding(.top, 6).transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        if #available(iOS 26.0, *) { t.tabBarMinimizeBehavior(.onScrollDown) } else { t }
+        .animation(.snappy(duration: 0.25), value: place)
+        .animation(.snappy(duration: 0.25), value: model.messages.isEmpty)
+        // "Spørg Koda" from anywhere lands in the chat.
+        .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
+            if place != .koda { place = .koda }
+            if let q = n.userInfo?["q"] as? String, !model.sending { model.send(q) }
+        }
+    }
+
+    private var switcher: some View {
+        HStack(spacing: 2) {
+            ForEach(Place.allCases, id: \.self) { p in
+                Button {
+                    guard p != place else { return }
+                    Haptic.tap(); Keyboard.hide(); place = p
+                } label: {
+                    Text(p.rawValue).font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(p == place ? Theme.bg : Theme.text.opacity(0.85))
+                        .padding(.horizontal, 13).frame(height: 34)
+                        .background {
+                            if p == place { Capsule().fill(Theme.text).matchedGeometryEffect(id: "sel", in: pill) }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(p == place ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .modifier(Glass())
+        .frame(height: 44)
     }
 }
 
