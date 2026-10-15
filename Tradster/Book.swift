@@ -488,7 +488,7 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
 
 // ---- the one screen ---------------------------------------------------------------------
 struct BookChatView: View {
-    @StateObject private var model = BookChatModel()
+    @ObservedObject var model: BookChatModel
     @State private var showBook = false
     @State private var showAgents = false
     @State private var showSettings = false
@@ -536,10 +536,8 @@ struct BookChatView: View {
                 })
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
+        .toolbar(model.messages.isEmpty ? .visible : .hidden, for: .tabBar)   // a conversation gets the whole screen
         .task { await model.bootstrap() }
-        .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
-            if let q = n.userInfo?["q"] as? String { if model.sending { box.draft = q } else { model.send(q) } }
-        }
         .onReceive(NotificationCenter.default.publisher(for: PushTarget.open)) { n in
             if let id = n.userInfo?["conv"] as? String { Task { await model.open(id) } }
         }
@@ -1618,6 +1616,7 @@ struct AgentsSheet: View {
 // ---- the book, right now: every open leg -------------------------------------------------
 struct BookSheet: View {
     @ObservedObject var model: BookChatModel
+    var asTab = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -1632,7 +1631,7 @@ struct BookSheet: View {
             }
             .background(Theme.bg)
             .navigationTitle("Bogen lige nu").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } }
+            .toolbar { if !asTab { ToolbarItem(placement: .topBarTrailing) { Button("Luk") { dismiss() }.foregroundStyle(Theme.secondary) } } }
             .refreshable { await model.bootstrap(); await LiveBook.shared.refresh() }
             .task { await LiveBook.shared.run() }
         }

@@ -22,7 +22,7 @@ struct TradsterRoot: View {
     var body: some View {
         Group {
             if paired == true {
-                NavigationStack { BookChatView() }
+                TradsterTabs()
             } else {
                 PairingView(code: code, checking: checking, paired: paired) { await check() }
             }
@@ -40,6 +40,39 @@ struct TradsterRoot: View {
             if code == nil { code = await DeviceAuth.requestCode() }
         }
         checking = false
+    }
+}
+
+/// Three places along the bottom, on Liquid Glass (iOS 26 draws the bar itself; iOS 18 gets the
+/// classic bar): Koda, the book live, and Inspiration. One BookChatModel for all of them.
+struct TradsterTabs: View {
+    enum Place: Hashable { case koda, bog, inspiration }
+    @StateObject private var model = BookChatModel()
+    @State private var place: Place = .koda
+    var body: some View {
+        tabs
+            .tint(Theme.text)
+            // "Spørg Koda" from anywhere lands in the chat.
+            // Handled here, not in the chat: a tab that is not on screen may not be listening.
+            .onReceive(NotificationCenter.default.publisher(for: AskKoda.note)) { n in
+                if place != .koda { withAnimation(.snappy) { place = .koda } }
+                if let q = n.userInfo?["q"] as? String, !model.sending { model.send(q) }
+            }
+            .onChange(of: place) { _, _ in Haptic.tap() }
+    }
+    @ViewBuilder private var tabs: some View {
+        let t = TabView(selection: $place) {
+            Tab("Koda", systemImage: "bubble.left.and.text.bubble.right", value: Place.koda) {
+                NavigationStack { BookChatView(model: model) }
+            }
+            Tab("Bogen", systemImage: "chart.line.uptrend.xyaxis", value: Place.bog) {
+                BookSheet(model: model, asTab: true)
+            }
+            Tab("Inspiration", systemImage: "sparkles", value: Place.inspiration) {
+                InspirationView()
+            }
+        }
+        if #available(iOS 26.0, *) { t.tabBarMinimizeBehavior(.onScrollDown) } else { t }
     }
 }
 
