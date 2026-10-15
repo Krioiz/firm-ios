@@ -9,6 +9,7 @@ struct Proposal: Codable, Hashable, Sendable, Identifiable {
     let id: String
     let title: String?; let summary: String?; let insample: PropStat?; let holdout: PropStat?
     let created_at: String?; let status: String?; let book: PropBook?
+    var runnable: Bool? = nil   // only a Kraken rule can run as a paper book
 }
 struct ProposalFeed: Codable, Sendable {
     var items: [Proposal]
@@ -99,6 +100,9 @@ struct LabSection: View {
             }
             HStack(spacing: 10) {
                 switch p.status {
+                case "venter" where p.runnable == false:
+                    Text("Målt på Binance: kan ikke køre på Kraken-papir.").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    Button { Haptic.tap(); Task { await m.decide(p.id, "reject") } } label: { pill("Afvis", "xmark", Theme.secondary) }.buttonStyle(.plain)
                 case "venter":
                     Button { Haptic.tap(); confirm = p } label: { pill("Start på papir", "play.fill", Theme.up) }.buttonStyle(.plain)
                     Button { Haptic.tap(); Task { await m.decide(p.id, "reject") } } label: { pill("Afvis", "xmark", Theme.secondary) }.buttonStyle(.plain)
