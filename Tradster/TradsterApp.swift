@@ -54,6 +54,8 @@ struct TradsterTabs: View {
     }
     @StateObject private var model = BookChatModel()
     @State private var place: Place = .koda
+    // The chat's drawer. Held here so the pill can slide with the card; only DrawerSlide watches it.
+    @State private var drawer = DrawerState()
     @Namespace private var pill
 
     var body: some View {
@@ -61,7 +63,7 @@ struct TradsterTabs: View {
             Theme.bg.ignoresSafeArea()
             Group {
                 switch place {
-                case .koda: NavigationStack { BookChatView(model: model) }
+                case .koda: NavigationStack { BookChatView(model: model, drawer: drawer) }
                 case .bog: BookSheet(model: model, asTab: true)
                 case .inspiration: InspirationView()
                 case .penge: EconomyView()
@@ -69,7 +71,7 @@ struct TradsterTabs: View {
             }
             .transition(.opacity)
             if place != .koda || model.messages.isEmpty {
-                switcher.padding(.top, 6).transition(.opacity.combined(with: .move(edge: .top)))
+                switcher.padding(.top, 6).modifier(DrawerSlide(d: drawer)).transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .animation(.snappy(duration: 0.25), value: place)

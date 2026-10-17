@@ -496,9 +496,9 @@ struct BookChatView: View {
     // Not observed here either: the screen does not re-render as you type.
     @State private var box = ComposerBox()
 
-    // Held in @State, not @StateObject: this view must not re-render when the drawer moves. Only
-    // the two small modifiers below watch it.
-    @State private var drawer = DrawerState()
+    // Owned by TradsterTabs (the top pill slides with the card) and not observed here: this view
+    // must not re-render when the drawer moves. Only the small modifiers below watch it.
+    let drawer: DrawerState
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -986,6 +986,13 @@ struct DrawerPage: ViewModifier {
 struct DrawerFloor: ViewModifier {
     @ObservedObject var d: DrawerState
     func body(content: Content) -> some View { content.opacity(Double(0.35 + 0.65 * d.amount)) }
+}
+
+/// The top pill belongs to the page's top row, so it slides aside with the card instead of
+/// hanging over the open drawer. Not tappable while the card is off its place.
+struct DrawerSlide: ViewModifier {
+    @ObservedObject var d: DrawerState
+    func body(content: Content) -> some View { content.offset(x: d.offset).allowsHitTesting(d.offset == 0) }
 }
 
 /// While Koda works: what it is looking at, line by line with the source's logo, then the text
