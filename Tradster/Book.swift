@@ -989,10 +989,16 @@ struct DrawerFloor: ViewModifier {
 }
 
 /// The top pill belongs to the page's top row, so it slides aside with the card instead of
-/// hanging over the open drawer. Not tappable while the card is off its place.
+/// hanging over the open drawer -- and fades out over the first 80 pt, so nothing of it is left
+/// over the conversation list while the drawer is open. Not tappable while the card is off its place.
 struct DrawerSlide: ViewModifier {
     @ObservedObject var d: DrawerState
-    func body(content: Content) -> some View { content.offset(x: d.offset).allowsHitTesting(d.offset == 0) }
+    func body(content: Content) -> some View {
+        content
+            .offset(x: d.offset)
+            .opacity(Double(max(0, 1 - d.offset / 80)))
+            .allowsHitTesting(d.offset == 0)
+    }
 }
 
 /// While Koda works: what it is looking at, line by line with the source's logo, then the text
