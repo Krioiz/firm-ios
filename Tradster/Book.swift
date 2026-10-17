@@ -281,7 +281,8 @@ struct LastOpen: Codable, Sendable { let id: String; let at: Date }
     struct Mode { let id: String; let label: String; let icon: String; let hint: String }
     static let modes = [Mode(id: "fast", label: "Hurtig", icon: "bolt", hint: "Kort svar med det samme"),
                         Mode(id: "analyse", label: "Analyse", icon: "chart.bar.xaxis", hint: "Tænker sig om, regner og viser tabeller"),
-                        Mode(id: "execute", label: "Udfør", icon: "checklist", hint: "Gør det, trin for trin")]
+                        Mode(id: "execute", label: "Udfør", icon: "checklist", hint: "Gør det, trin for trin"),
+                        Mode(id: "economy", label: "Kodaconomy", icon: "banknote", hint: "Din egen økonomi: forbrug, abonnementer, regninger")]
     static func modeInfo(_ id: String) -> Mode { modes.first { $0.id == id } ?? modes[0] }
     private static var savedModes: [String: String] { UserDefaults.standard.dictionary(forKey: "modes") as? [String: String] ?? [:] }
     func setMode(_ m: String) { mode = m; saveMode() }
@@ -765,7 +766,7 @@ struct ComposerView: View {
             }
         }
         .accessibilityLabel("Svar: \(m.label)")
-        .accessibilityHint("Tryk for at skifte mellem Hurtig, Analyse og Udfør")
+        .accessibilityHint("Tryk for at skifte mellem Hurtig, Analyse, Udfør og Kodaconomy")
     }
 
     /// Network trouble, said once and quietly above the composer, with a way to try again.

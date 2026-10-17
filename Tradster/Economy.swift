@@ -11,13 +11,28 @@ struct EcoConsent: Codable, Sendable { let status: String?; let valid_until: Str
 struct EcoCat: Codable, Hashable, Sendable { let cat: String?; let kr: Double?; let avg_kr: Double?; let vs_avg_pct: Double?; let icon: String? }
 struct EcoMonth: Codable, Sendable { let label: String?; let spent: Double?; let income: Double?; let avg_spent: Double?; let projected: Double?; let by_category: [EcoCat]? }
 struct EcoWeek: Codable, Sendable { let spent: Double?; let avg_spent: Double? }
-struct EcoSub: Codable, Hashable, Sendable { let name: String?; let kr: Double?; let every: String?; let last: String? }
-struct EcoTx: Codable, Hashable, Sendable { let at: String?; let name: String?; let kr: Double?; let cat: String? }
+struct EcoSub: Codable, Hashable, Sendable { let name: String?; let kr: Double?; let every: String?; let last: String?; var logo: String? = nil }
+struct EcoTx: Codable, Hashable, Sendable { let at: String?; let name: String?; let kr: Double?; let cat: String?; var logo: String? = nil; var adjusted: Bool? = nil }
 struct EcoAlert: Codable, Hashable, Sendable { let at: String?; let text: String? }
 struct EcoSaving: Codable, Hashable, Sendable { let cat: String?; let monthly_kr: Double?; let fv_1y: Double?; let fv_5y: Double?; let fv_10y: Double? }
 struct Economy: Codable, Sendable {
     let at: String?; let consent: EcoConsent?; let month: EcoMonth?; let week: EcoWeek?
-    let subscriptions: [EcoSub]?; let recent: [EcoTx]?; let alerts: [EcoAlert]?; let savings_examples: [EcoSaving]?
+    let subscriptions: [EcoSub]?; var bills: [EcoSub]? = nil; let recent: [EcoTx]?; let alerts: [EcoAlert]?; let savings_examples: [EcoSaving]?
+}
+
+/// A merchant's own icon (served by the server from its cache), else a monogram in a quiet circle.
+struct MerchantLogo: View {
+    let url: String?; let name: String?; var size: CGFloat = 30
+    private var abs: String? { url.map { $0.hasPrefix("/") ? "https://getstubbie.com\($0)" : $0 } }
+    var body: some View {
+        CachedImage(url: abs, px: Int(size * 3)) { monogram }
+            .frame(width: size, height: size).clipShape(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+    }
+    private var monogram: some View {
+        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(Theme.surface2)
+            .overlay(Text(String((name ?? "?").trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                .font(.system(size: size * 0.42, weight: .semibold, design: .rounded)).foregroundStyle(Theme.secondary))
+    }
 }
 
 @MainActor final class EconomyModel: ObservableObject {
@@ -73,6 +88,10 @@ struct EconomyView: View {
                 if let cats = m.e?.month?.by_category, !cats.isEmpty { categories(cats) }
                 VStack(spacing: 0) {
                     fold("sparer", title: "Hvis du sparer", value: "\(kr(saving))/md → \(kr(fv(saving, years: 10))) på 10 år") { simulator }
+                    if let bills = m.e?.bills, !bills.isEmpty {
+                        divider
+                        fold("bills", title: "Regninger", value: "\(kr(subsMonthly(bills)))/md") { subscriptions(bills) }
+                    }
                     if let subs = m.e?.subscriptions, !subs.isEmpty {
                         divider
                         fold("subs", title: "Abonnementer", value: "\(kr(subsMonthly(subs)))/md") { subscriptions(subs) }
@@ -200,11 +219,25 @@ struct EconomyView: View {
                 fvTile("5 år", fv(saving, years: 5))
                 fvTile("10 år", fv(saving, years: 10))
             }
-            if let s = m.e?.savings_examples?.first, let c = s.cat, let mk = s.monthly_kr, mk > 0 {
-                Button { Haptic.tap(); withAnimation(.snappy) { saving = min(10000, max(100, (mk / 100).rounded() * 100)) } } label: {
-                    Text("Halvér \(c.lowercased()): \(kr(mk))/md").font(.system(size: 14)).foregroundStyle(Theme.accent)
+            if let ex = m.e?.savings_examples, !ex.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Hvad du skal spare for at …").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    ForEach(ex, id: \.self) { s in
+                        if let c = s.cat, let mk = s.monthly_kr, mk > 0 {
+                            Button { Haptic.tap(); withAnimation(.snappy) { saving = min(10000, max(100, (mk / 100).rounded() * 100)) } } label: {
+                                HStack {
+                                    Text("halvere \(c.lowercased())").foregroundStyle(Theme.text)
+                                    Spacer()
+                                    Text("\(kr(mk))/md").monospacedDigit().foregroundStyle(Theme.accent)
+                                    Text("→ \(kr(s.fv_10y ?? fv(mk, years: 10)))").monospacedDigit().foregroundStyle(Theme.up)
+                                }
+                                .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.top, 4)
             }
             Text("7 % om året er en antagelse.").font(.system(size: 12)).foregroundStyle(Theme.secondary.opacity(0.7))
         }
@@ -219,14 +252,17 @@ struct EconomyView: View {
         .padding(10).background(Theme.surface2.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func subsMonthly(_ subs: [EcoSub]) -> Double { subs.reduce(0) { $0 + ($1.every == "år" ? ($1.kr ?? 0) / 12 : ($1.kr ?? 0)) } }
+    private func perMonth(_ s: EcoSub) -> Double { (s.kr ?? 0) / (s.every == "år" ? 12 : s.every == "kvartal" ? 3 : 1) }
+    private func subsMonthly(_ subs: [EcoSub]) -> Double { subs.reduce(0) { $0 + perMonth($1) } }
+    private func everyLabel(_ e: String?) -> String { e == "år" ? "år" : e == "kvartal" ? "kvt" : "md" }
     private func subscriptions(_ subs: [EcoSub]) -> some View {
         VStack(spacing: 0) {
             ForEach(subs, id: \.self) { s in
-                HStack {
+                HStack(spacing: 12) {
+                    MerchantLogo(url: s.logo, name: s.name, size: 30)
                     Text(s.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
                     Spacer()
-                    Text("\(kr(s.kr ?? 0))/\(s.every == "år" ? "år" : "md")").font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.secondary)
+                    Text("\(kr(s.kr ?? 0))/\(everyLabel(s.every))").font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.secondary)
                 }
                 .padding(.vertical, 7)
             }
@@ -236,11 +272,14 @@ struct EconomyView: View {
     private func recent(_ r: [EcoTx]) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(r.prefix(10).enumerated()), id: \.offset) { _, t in
-                HStack {
-                    Text(t.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
+                HStack(spacing: 12) {
+                    MerchantLogo(url: t.logo, name: t.name, size: 30)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(t.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
+                        Text(t.adjusted == true ? "\(Tradster.when(t.at)) · rettet" : Tradster.when(t.at)).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    }
                     Spacer()
-                    Text(Tradster.when(t.at)).font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    Text(kr(t.kr ?? 0)).font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.text).frame(minWidth: 72, alignment: .trailing)
+                    Text(kr(t.kr ?? 0)).font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.text)
                 }
                 .padding(.vertical, 7)
             }
