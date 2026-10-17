@@ -2,8 +2,10 @@ import SwiftUI
 
 // Kodaconomy: Marco's own spending, read-only from Lunar via Enable Banking. The server categorises
 // locally (no transaction ever goes to a model), pushes a "smæk" when a category runs hot, and does
-// the savings math in code. Here: the month at a glance, categories against normal, the savings
-// slider, subscriptions, the latest purchases and the last slaps.
+// the savings math in code. The page is deliberately quiet (Marco, 17 Oct 2026: "alt for rodet, alt
+// for meget tekst"): one number, one line under it, the top five categories as bars, and three
+// folded rows (sparer, abonnementer, seneste) that open on tap. No percentages in prose, no cards
+// inside cards.
 
 struct EcoConsent: Codable, Sendable { let status: String?; let valid_until: String?; let relink_url: String? }
 struct EcoCat: Codable, Hashable, Sendable { let cat: String?; let kr: Double?; let avg_kr: Double?; let vs_avg_pct: Double?; let icon: String? }
@@ -54,25 +56,36 @@ struct EconomyView: View {
     @StateObject private var m = EconomyModel()
     @Environment(\.openURL) private var openURL
     @State private var saving: Double = 1000
+    @State private var allCats = false
+    @State private var open: Set<String> = []
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(alignment: .firstTextBaseline) {
                     Text("Kodaconomy").font(.system(size: 34, weight: .regular, design: .serif)).foregroundStyle(Theme.text)
-                    Text(m.e?.month?.label.map { "Dit forbrug i \($0)" } ?? "Dit forbrug, læst fra Lunar").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    if let l = m.e?.month?.label { Text(l).font(.system(size: 13)).foregroundStyle(Theme.secondary) }
                 }
                 .padding(.top, 58)
                 consentBanner
                 if let mo = m.e?.month { headline(mo) }
-                if let w = m.e?.week, let s = w.spent, let a = w.avg_spent, a > 0 { weekLine(s, a) }
-                if let a = m.e?.alerts, !a.isEmpty { slaps(a) }
+                if let a = m.e?.alerts?.first, let t = a.text, !t.isEmpty { slap(t) }
                 if let cats = m.e?.month?.by_category, !cats.isEmpty { categories(cats) }
-                simulator
-                if let subs = m.e?.subscriptions, !subs.isEmpty { subscriptions(subs) }
-                if let r = m.e?.recent, !r.isEmpty { recent(r) }
+                VStack(spacing: 0) {
+                    fold("sparer", title: "Hvis du sparer", value: "\(kr(saving))/md → \(kr(fv(saving, years: 10))) på 10 år") { simulator }
+                    if let subs = m.e?.subscriptions, !subs.isEmpty {
+                        divider
+                        fold("subs", title: "Abonnementer", value: "\(kr(subsMonthly(subs)))/md") { subscriptions(subs) }
+                    }
+                    if let r = m.e?.recent, !r.isEmpty {
+                        divider
+                        fold("recent", title: "Seneste", value: r.first.flatMap { $0.name } ?? "") { recent(r) }
+                    }
+                }
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 if m.loading && m.e == nil { ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(.top, 40) }
-                Text("Kun læseadgang til din konto. Posteringer sendes aldrig til en AI; Koda ser kun totaler pr. kategori. 7 % om året er en antagelse, ikke et løfte.")
-                    .font(.footnote).foregroundStyle(Theme.secondary.opacity(0.7)).padding(.vertical, 20)
+                Text("Kun læseadgang. Koda ser kun totaler pr. kategori.")
+                    .font(.footnote).foregroundStyle(Theme.secondary.opacity(0.6)).padding(.vertical, 12)
             }
             .padding(.horizontal, 16)
         }
@@ -87,7 +100,7 @@ struct EconomyView: View {
         if st == "udloebet" || st == "mangler" || st == "udloeber_snart" {
             HStack(spacing: 10) {
                 Image(systemName: "building.columns").foregroundStyle(Theme.accent)
-                Text(st == "udloeber_snart" ? "Adgangen til Lunar udløber snart." : "Ingen adgang til Lunar lige nu.")
+                Text(st == "udloeber_snart" ? "Adgangen til Lunar udløber snart." : "Ingen adgang til Lunar.")
                     .font(.system(size: 14)).foregroundStyle(Theme.text)
                 Spacer()
                 Button("Forbind") { Haptic.tap(); Task { if let u = await m.relink() { openURL(u) } } }
@@ -97,95 +110,89 @@ struct EconomyView: View {
         }
     }
 
+    /// One number and one line. Red only when the month is heading more than 5 % over normal.
     private func headline(_ mo: EcoMonth) -> some View {
         let spent = mo.spent ?? 0, avg = mo.avg_spent ?? 0
-        let over = avg > 0 ? (spent / avg - 1) * 100 : 0
+        let hot = avg > 0 && (mo.projected ?? spent) > avg * 1.05
         return VStack(alignment: .leading, spacing: 6) {
-            Text("Brugt indtil nu").font(.system(size: 13)).foregroundStyle(Theme.secondary)
-            Text(kr(spent)).font(.system(size: 40, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.text)
+            Text("Brugt denne måned").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+            Text(kr(spent)).font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.text)
                 .contentTransition(.numericText(value: spent))
-            HStack(spacing: 8) {
-                if let p = mo.projected { Text("På vej mod \(kr(p))").foregroundStyle(p > avg * 1.05 && avg > 0 ? Theme.down : Theme.secondary) }
-                if avg > 0 { Text("· normalt \(kr(avg))").foregroundStyle(Theme.secondary) }
+            if let p = mo.projected, avg > 0 {
+                Text("På vej mod \(kr(p)) · normalt \(kr(avg))").font(.system(size: 14)).monospacedDigit()
+                    .foregroundStyle(hot ? Theme.down : Theme.secondary)
             }
-            .font(.system(size: 14)).monospacedDigit()
-            if avg > 0 && abs(over) >= 5 {
-                Text(over > 0 ? "\(Int(over.rounded())) % over din normale måned" : "\(Int((-over).rounded())) % under din normale måned")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(over > 0 ? Theme.down : Theme.up)
+            if let w = m.e?.week, let s = w.spent, let a = w.avg_spent, a > 0, s / a > 1.2 {
+                Text("Denne uge \(kr(s)), normalt \(kr(a))").font(.system(size: 14)).monospacedDigit().foregroundStyle(Theme.down)
             }
         }
     }
 
-    private func weekLine(_ s: Double, _ a: Double) -> some View {
-        let ratio = s / a
-        return HStack {
-            Text("Denne uge").foregroundStyle(Theme.secondary)
-            Spacer()
-            Text(kr(s)).foregroundStyle(Theme.text).monospacedDigit()
-            Text(String(format: "%.1f× normalt", ratio).replacingOccurrences(of: ".", with: ",")).monospacedDigit()
-                .foregroundStyle(ratio > 1.2 ? Theme.down : Theme.secondary)
+    /// Only the latest slap, one line, no box.
+    private func slap(_ t: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "hand.raised.fill").font(.system(size: 13)).foregroundStyle(Theme.down).padding(.top, 3)
+            Text(t).font(.system(size: 15)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
         }
-        .font(.system(size: 15))
-        .padding(14).background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func slaps(_ a: [EcoAlert]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            label("Smæk")
-            ForEach(a.prefix(3), id: \.self) { x in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "hand.raised.fill").font(.system(size: 13)).foregroundStyle(Theme.down).padding(.top, 2)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(x.text ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
-                        Text(Tradster.when(x.at)).font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    }
-                }
-            }
-        }
-        .padding(16).background(Theme.down.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
+    /// Top five as bars. Red bar = more than 20 % over normal; the number says the rest.
     private func categories(_ cats: [EcoCat]) -> some View {
-        let top = cats.map { $0.kr ?? 0 }.max() ?? 1
-        return VStack(alignment: .leading, spacing: 4) {
-            label("Kategorier")
-            ForEach(cats, id: \.self) { c in
+        let sorted = cats.sorted { ($0.kr ?? 0) > ($1.kr ?? 0) }
+        let shown = allCats ? sorted : Array(sorted.prefix(5))
+        let top = sorted.first?.kr ?? 1
+        return VStack(alignment: .leading, spacing: 14) {
+            ForEach(shown, id: \.self) { c in
                 let v = c.kr ?? 0, pct = c.vs_avg_pct ?? 0
-                HStack(spacing: 12) {
-                    Image(systemName: c.icon ?? "circle").font(.system(size: 15)).foregroundStyle(Theme.secondary).frame(width: 26)
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Text(c.cat ?? "").font(.system(size: 15)).foregroundStyle(Theme.text)
-                            Spacer()
-                            Text(kr(v)).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.text)
-                        }
-                        GeometryReader { g in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(Theme.surface2)
-                                Capsule().fill(pct > 20 ? Theme.down : Theme.accent.opacity(0.8)).frame(width: max(4, g.size.width * v / max(top, 1)))
-                            }
-                        }
-                        .frame(height: 5)
-                        if abs(pct) >= 10 {
-                            Text(pct > 0 ? "+\(Int(pct.rounded())) % over normalt" : "\(Int(pct.rounded())) % under normalt")
-                                .font(.system(size: 12)).foregroundStyle(pct > 0 ? Theme.down : Theme.up)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(c.cat ?? "").font(.system(size: 15)).foregroundStyle(Theme.text)
+                        Spacer()
+                        Text(kr(v)).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(pct > 20 ? Theme.down : Theme.text)
+                    }
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Theme.surface2)
+                            Capsule().fill(pct > 20 ? Theme.down : Theme.accent.opacity(0.75)).frame(width: max(4, g.size.width * v / max(top, 1)))
                         }
                     }
+                    .frame(height: 4)
                 }
-                .padding(.vertical, 8)
+            }
+            if sorted.count > 5 {
+                Button(allCats ? "Færre" : "Alle \(sorted.count)") { Haptic.tap(); withAnimation(.snappy) { allCats.toggle() } }
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent).buttonStyle(.plain)
             }
         }
     }
 
-    /// "Hvis du sparer X": a slider, and what it becomes.
+    /// A folded row: title left, one value right, chevron; the content opens under it on tap.
+    private func fold<C: View>(_ key: String, title: String, value: String, @ViewBuilder _ content: () -> C) -> some View {
+        let isOpen = open.contains(key)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                Haptic.tap()
+                withAnimation(.snappy) { if isOpen { open.remove(key) } else { open.insert(key) } }
+            } label: {
+                HStack(spacing: 10) {
+                    Text(title).font(.system(size: 15)).foregroundStyle(Theme.text)
+                    Spacer()
+                    if !isOpen {
+                        Text(value).font(.system(size: 14)).monospacedDigit().foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
+                    }
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                }
+                .padding(.horizontal, 16).padding(.vertical, 15).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isOpen { content().padding(.horizontal, 16).padding(.bottom, 16) }
+        }
+    }
+    private var divider: some View { Rectangle().fill(Theme.surface2).frame(height: 1).padding(.horizontal, 16) }
+
     private var simulator: some View {
         VStack(alignment: .leading, spacing: 12) {
-            label("Hvis du sparer …")
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(kr(saving)) om måneden").font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.text)
-                    .contentTransition(.numericText(value: saving))
-                Spacer()
-            }
             Slider(value: $saving, in: 100...10000, step: 100).tint(Theme.accent)
                 .onChange(of: saving) { _, _ in UISelectionFeedbackGenerator().selectionChanged() }
             HStack(spacing: 8) {
@@ -193,24 +200,14 @@ struct EconomyView: View {
                 fvTile("5 år", fv(saving, years: 5))
                 fvTile("10 år", fv(saving, years: 10))
             }
-            if let ex = m.e?.savings_examples, !ex.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(ex, id: \.self) { s in
-                        Button { Haptic.tap(); withAnimation(.snappy) { saving = min(10000, max(100, ((s.monthly_kr ?? 0) / 100).rounded() * 100)) } } label: {
-                            HStack {
-                                Text("Halvér \(s.cat?.lowercased() ?? "")").foregroundStyle(Theme.text)
-                                Spacer()
-                                Text("\(kr(s.monthly_kr ?? 0))/md → \(kr(s.fv_10y ?? 0)) på 10 år").monospacedDigit().foregroundStyle(Theme.up)
-                            }
-                            .font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                    }
+            if let s = m.e?.savings_examples?.first, let c = s.cat, let mk = s.monthly_kr, mk > 0 {
+                Button { Haptic.tap(); withAnimation(.snappy) { saving = min(10000, max(100, (mk / 100).rounded() * 100)) } } label: {
+                    Text("Halvér \(c.lowercased()): \(kr(mk))/md").font(.system(size: 14)).foregroundStyle(Theme.accent)
                 }
-                .padding(.top, 4)
+                .buttonStyle(.plain)
             }
+            Text("7 % om året er en antagelse.").font(.system(size: 12)).foregroundStyle(Theme.secondary.opacity(0.7))
         }
-        .padding(16).background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
     private func fvTile(_ l: String, _ v: Double) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -222,15 +219,14 @@ struct EconomyView: View {
         .padding(10).background(Theme.surface2.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    private func subsMonthly(_ subs: [EcoSub]) -> Double { subs.reduce(0) { $0 + ($1.every == "år" ? ($1.kr ?? 0) / 12 : ($1.kr ?? 0)) } }
     private func subscriptions(_ subs: [EcoSub]) -> some View {
-        let total = subs.reduce(0) { $0 + (($1.every == "år" ? ($1.kr ?? 0) / 12 : ($1.kr ?? 0))) }
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack { label("Abonnementer"); Spacer(); Text("\(kr(total))/md").font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.secondary) }
+        VStack(spacing: 0) {
             ForEach(subs, id: \.self) { s in
                 HStack {
                     Text(s.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
                     Spacer()
-                    Text("\(kr(s.kr ?? 0))/\(s.every == "år" ? "år" : "md")").font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.text)
+                    Text("\(kr(s.kr ?? 0))/\(s.every == "år" ? "år" : "md")").font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.secondary)
                 }
                 .padding(.vertical, 7)
             }
@@ -238,23 +234,16 @@ struct EconomyView: View {
     }
 
     private func recent(_ r: [EcoTx]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            label("Seneste")
-            ForEach(Array(r.prefix(15).enumerated()), id: \.offset) { _, t in
+        VStack(spacing: 0) {
+            ForEach(Array(r.prefix(10).enumerated()), id: \.offset) { _, t in
                 HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(t.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
-                        Text([t.cat, Tradster.when(t.at)].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    }
+                    Text(t.name ?? "").font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(1)
                     Spacer()
-                    Text(kr(t.kr ?? 0)).font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.text)
+                    Text(Tradster.when(t.at)).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    Text(kr(t.kr ?? 0)).font(.system(size: 15)).monospacedDigit().foregroundStyle(Theme.text).frame(minWidth: 72, alignment: .trailing)
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 7)
             }
         }
-    }
-
-    private func label(_ t: String) -> some View {
-        Text(t).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary).textCase(.uppercase).kerning(0.6)
     }
 }
