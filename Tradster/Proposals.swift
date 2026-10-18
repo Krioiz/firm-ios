@@ -64,19 +64,27 @@ private func bp(_ v: Double?) -> String {
 struct LabSection: View {
     @ObservedObject var m = ProposalModel.shared
     @State private var confirm: Proposal? = nil
+    @State private var showLab = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let l = m.lab {
-                HStack(spacing: 6) {
-                    Image(systemName: "flask").font(.system(size: 12, weight: .semibold))
-                    Text("Koda har testet \(l.tested ?? 0) idéer · \(l.passed ?? 0) bestået · \(l.runs_today ?? 0) kørsler i dag")
+                // The line opens the Lab page: every test as numbers, without asking Koda.
+                Button { Haptic.tap(); showLab = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "flask").font(.system(size: 12, weight: .semibold))
+                        Text("Koda har testet \(l.tested ?? 0) idéer · \(l.passed ?? 0) bestået · \(l.runs_today ?? 0) kørsler i dag")
+                            .lineLimit(1).minimumScaleFactor(0.85)
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(.system(size: 13)).foregroundStyle(Theme.secondary).contentShape(Rectangle())
                 }
-                .font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                .buttonStyle(.plain)
             }
             ForEach(m.items.filter { $0.status != "afvist" }) { p in card(p) }
             if let e = m.error { Text(e).font(.system(size: 13)).foregroundStyle(Theme.down) }
         }
         .task { await m.load() }
+        .sheet(isPresented: $showLab) { LabView().presentationDragIndicator(.visible) }
         .confirmationDialog("Start på papir?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible, presenting: confirm) { p in
             Button("Start på papir (5.000 kr papir)") { Task { await m.decide(p.id, "approve") } }
             Button("Annuller", role: .cancel) {}
