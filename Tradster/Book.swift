@@ -1327,6 +1327,7 @@ struct SettingsSheet: View {
     @State private var keyDraft = ""
     @State private var keyBusy = false
     @State private var keyNote: String? = nil
+    @State private var dataKeys: [DataKey] = []
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -1360,6 +1361,13 @@ struct SettingsSheet: View {
                 } header: { Text("Kodas model") } footer: {
                     Text("Lav nøglen på platform.claude.com → API keys. Den gemmes kun på serveren.").foregroundStyle(Theme.secondary)
                 }.listRowBackground(Theme.surface)
+                // Data subscriptions (Sharadar, ...): the login goes straight to the server's secrets/,
+                // the app keeps nothing and only ever sees "gemt" and when.
+                Section {
+                    ForEach(dataKeys) { k in DataKeyRow(key: k) { await loadDataKeys() } }
+                } header: { Text("Dataadgang") } footer: {
+                    Text("Nøglerne gemmes kun på serveren og vises aldrig igen.").foregroundStyle(Theme.secondary)
+                }.listRowBackground(Theme.surface)
                 Section("Hvad Koda husker om dig") {
                     if facts.isEmpty { Text("Intet endnu").foregroundStyle(Theme.secondary) }
                     ForEach(Array(facts.enumerated()), id: \.offset) { i, f in
@@ -1371,7 +1379,7 @@ struct SettingsSheet: View {
             .scrollContentBackground(.hidden).background(Theme.bg)
             .navigationTitle("Indstillinger").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Færdig") { dismiss() }.foregroundStyle(Theme.accent) } }
-            .task { await load(); await loadLLM() }
+            .task { await load(); await loadLLM(); await loadDataKeys() }
         }
         .preferredColorScheme(.dark)
     }
@@ -1392,6 +1400,11 @@ struct SettingsSheet: View {
         } else { keyNote = "Ingen forbindelse."; Haptic.fail() }
         keyBusy = false
     }
+    private func loadDataKeys() async {
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/settings/data-keys")!); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        guard let (d, _) = try? await URLSession.shared.data(for: r), let j = try? JSONDecoder().decode(DataKeys.self, from: d) else { return }
+        dataKeys = j.keys
+    }
     /// The server's shape is read loosely: a list of strings, or of objects with a text field.
     private func load() async {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/memory")!); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
@@ -1403,6 +1416,53 @@ struct SettingsSheet: View {
     private func forget(_ i: Int) async {
         var r = URLRequest(url: URL(string: "\(Tradster.base)/book/memory/\(i)")!); r.httpMethod = "DELETE"; r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
         _ = try? await URLSession.shared.data(for: r); Haptic.pick(); await load()
+    }
+}
+
+struct DataKey: Decodable, Identifiable { let id: String; let name: String; let hint: String; let saved: Bool; let saved_at: String? }
+struct DataKeys: Decodable { let keys: [DataKey] }
+
+/// One data subscription: its state, and a field to paste a new login into.
+struct DataKeyRow: View {
+    let key: DataKey
+    let reload: () async -> Void
+    @State private var open = false
+    @State private var draft = ""
+    @State private var busy = false
+    @State private var note: String? = nil
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation(.snappy) { open.toggle() } } label: {
+                HStack {
+                    Text(key.name).foregroundStyle(Theme.text)
+                    Spacer()
+                    Text(key.saved ? "Gemt \(String((key.saved_at ?? "").prefix(10)))" : "Ikke tilsluttet")
+                        .font(.system(size: 13)).foregroundStyle(key.saved ? Theme.up : Theme.secondary)
+                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                }
+            }.buttonStyle(.plain)
+            if open {
+                SecureField("", text: $draft, prompt: Text(key.hint).foregroundStyle(Theme.secondary))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Theme.text)
+                Button { Task { await save() } } label: {
+                    HStack { if busy { ProgressView().tint(Theme.accent) }; Text(key.saved ? "Skift nøgle" : "Gem") }
+                }
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || busy).foregroundStyle(Theme.accent)
+                if let note { Text(note).font(.system(size: 12)).foregroundStyle(note.hasPrefix("Gemt") ? Theme.up : Theme.down) }
+            }
+        }
+    }
+    private func save() async {
+        busy = true; note = nil
+        var r = URLRequest(url: URL(string: "\(Tradster.base)/book/settings/data-key")!)
+        r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type"); r.setValue("Tradster/1.0", forHTTPHeaderField: "User-Agent")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["service": key.id, "key": draft.trimmingCharacters(in: .whitespacesAndNewlines)])
+        if let (d, resp) = try? await URLSession.shared.data(for: r) {
+            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+            if (resp as? HTTPURLResponse)?.statusCode == 200 { note = "Gemt."; draft = ""; Haptic.done(); await reload() }
+            else { note = j?["error"] as? String ?? "Kunne ikke gemme."; Haptic.fail() }
+        } else { note = "Ingen forbindelse."; Haptic.fail() }
+        busy = false
     }
 }
 
