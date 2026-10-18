@@ -52,7 +52,7 @@ private func num(_ v: Double?, _ digits: Int = 1) -> String {
     return String(format: "%.\(digits)f", v).replacingOccurrences(of: ".", with: ",").replacingOccurrences(of: "-", with: "−")
 }
 private func domColor(_ d: String?) -> Color {
-    switch d { case "Kandidat": Theme.up; case "Svag": Theme.accent; default: Theme.secondary }
+    switch d { case "Kandidat", "Bestod holdout": Theme.up; case "Svag": Theme.accent; default: Theme.secondary }
 }
 
 struct LabView: View {
