@@ -187,6 +187,21 @@ targets:
         NSFaceIDUsageDescription: Lås Kaneo ACT op med Face ID.
         NSMicrophoneUsageDescription: Diktér beskeder til Neo.
         NSSpeechRecognitionUsageDescription: Det du siger bliver til tekst på telefonen, som sendes til Neo.
+        NSCameraUsageDescription: Scan en kvittering, så den kommer i Bilag.
+        # Long press on the app icon.
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: neo
+            UIApplicationShortcutItemTitle: Spørg Neo
+            UIApplicationShortcutItemIconSymbolName: waveform
+          - UIApplicationShortcutItemType: scan
+            UIApplicationShortcutItemTitle: Scan kvittering
+            UIApplicationShortcutItemIconSymbolName: camera.viewfinder
+          - UIApplicationShortcutItemType: opgave
+            UIApplicationShortcutItemTitle: Ny opgave
+            UIApplicationShortcutItemIconSymbolName: plus.circle
+          - UIApplicationShortcutItemType: tildig
+            UIApplicationShortcutItemTitle: Til dig
+            UIApplicationShortcutItemIconSymbolName: house
         # DM Sans and DM Mono, SIL Open Font License 1.1 (licence files next to the fonts).
         UIAppFonts: [DMSans-Regular.otf, DMSans-Medium.otf, DMSans-SemiBold.otf, DMMono-Regular.ttf, DMMono-Medium.ttf]
     settings:

@@ -272,6 +272,10 @@ struct ToDigView: View {
         .listRowInsets(EdgeInsets(top: Theme.s1, leading: Theme.s3, bottom: Theme.s3, trailing: Theme.s3))
         .listRowBackground(Color.clear).listRowSeparator(.hidden)
 
+        QuickGrid()
+            .listRowInsets(EdgeInsets(top: 0, leading: Theme.s3, bottom: Theme.s3, trailing: Theme.s3))
+            .listRowBackground(Color.clear).listRowSeparator(.hidden)
+
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(Theme.sans(17, .medium)).foregroundStyle(Theme.sec)
             if store.overblik["pause"]["pause"].bool {
@@ -335,6 +339,7 @@ struct ToDigDialogs: ViewModifier {
     @Binding var searching: Bool
     func body(content: Content) -> some View {
         content
+            .modifier(QuickDialogs())
             .confirmationDialog(confirm.map { Act.confirmText($0) } ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
                 if let it = confirm {
                     Button(it.primary ?? "Fortsæt") { Task { await Act.primary(it) } }
@@ -522,5 +527,49 @@ struct SearchResults: View {
         if !tasks.isEmpty {
             Section("Opgaver") { ForEach(Array(tasks), id: \.self) { c in NavigationLink(value: NavTarget.item(c)) { ItemRow(c: c) } } }
         }
+    }
+}
+
+/// Sheets and questions from the quick actions and the home-screen shortcuts.
+struct QuickDialogs: ViewModifier {
+    @ObservedObject private var router = Router.shared
+    @ObservedObject private var store = Store.shared
+    func body(content: Content) -> some View {
+        let paused = store.overblik["pause"]["pause"].bool
+        return content
+            .sheet(item: $router.sheet) { s in
+                switch s {
+                case .opgave: NewTaskSheet()
+                case .dikter: DictateNoteSheet()
+                case .faktura: NewInvoiceSheet()
+                case .kontrakt: NewContractSheet()
+                case .scan: ScanReceipt().ignoresSafeArea()
+                }
+            }
+            .confirmationDialog(router.ask == .leads ? "Find nye leads nu?" : (paused ? "Genoptag alle agenter?" : "Sæt alle agenter på pause?"),
+                                isPresented: Binding(get: { router.ask != nil }, set: { if !$0 { router.ask = nil } }), titleVisibility: .visible) {
+                if router.ask == .leads {
+                    Button("Start Salg-agenten") {
+                        Task {
+                            do { try await API.shared.send("api/agent/Salg/koer"); Haptic.approve(); Toast.shared.show("Salg-agenten leder efter leads") }
+                            catch { Haptic.fail(); Toast.shared.show(error.localizedDescription) }
+                        }
+                    }
+                } else {
+                    Button(paused ? "Genoptag" : "Sæt på pause", role: paused ? nil : .destructive) {
+                        Task {
+                            do {
+                                try await API.shared.send("api/pause", ["pause": !paused])
+                                if paused { Haptic.approve() } else { Haptic.reject() }
+                                Toast.shared.show(paused ? "Agenterne kører igen" : "Alle agenter er på pause")
+                                await store.load()
+                            } catch { Haptic.fail(); Toast.shared.show(error.localizedDescription) }
+                        }
+                    }
+                }
+                Button("Annullér", role: .cancel) {}
+            } message: {
+                Text(router.ask == .leads ? "Salg-agenten finder og scorer danske småvirksomheder. Den sender intet." : (paused ? "Timere og opgaver starter igen." : "Ingen opgaver tages, og timere springer over."))
+            }
     }
 }

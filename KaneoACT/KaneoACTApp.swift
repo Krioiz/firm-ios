@@ -21,6 +21,9 @@ enum Tab: Hashable { case idag, beslut, mail, neo, mere }
     @Published var stamp = 0
     /// Text to put in Neo's field when it opens with context ("Om mailen fra ...: ").
     @Published var neoDraft: String?
+    /// A quick action's sheet or question, shown on "Til dig".
+    @Published var sheet: QuickSheet?
+    @Published var ask: QuickAsk?
     func changed() { stamp += 1 }
     func askNeo(_ draft: String?) {
         if let draft { neoDraft = draft }
@@ -40,6 +43,19 @@ final class Push: NSObject, UIApplicationDelegate, UNUserNotificationCenterDeleg
     func application(_ app: UIApplication, didFinishLaunchingWithOptions o: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    /// Home-screen shortcuts: a cold launch carries the item here, a warm one goes to the scene delegate.
+    func application(_ app: UIApplication, configurationForConnecting s: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        if let t = options.shortcutItem?.type {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                Quick.shortcut(t)
+            }
+        }
+        let c = UISceneConfiguration(name: nil, sessionRole: s.role)
+        c.delegateClass = ShortcutSceneDelegate.self
+        return c
     }
 
     /// Asked after login, not at first launch: a permission prompt over the login screen reads as noise.

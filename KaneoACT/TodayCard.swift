@@ -96,7 +96,7 @@ struct TodayCard: View {
         VStack(alignment: .leading, spacing: Theme.s2) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Klaret i dag").font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec)
+                    Text("Det har systemet klaret i dag").font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec)
                     HStack(alignment: .firstTextBaseline, spacing: Theme.s1) {
                         Text("\(d["klaret_i_dag"].int ?? 0)").font(Theme.mono(40, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
                         Delta(now: d["klaret_i_dag"].int ?? 0, before: d["klaret_i_gaar"].int ?? 0)
@@ -106,24 +106,12 @@ struct TodayCard: View {
                 Text("7 dage").font(Theme.meta).foregroundStyle(Theme.dim)
             }
             Spark(points: series(d, "klaret", last: 7))
-            HStack(alignment: .top, spacing: 0) {
-                figure("\(d["mails_i_dag"].int ?? 0)", "Mails besvaret i dag", delta: (d["mails_i_dag"].int ?? 0, d["mails_i_gaar"].int ?? 0))
-                figure(d["mrr"].int.map { daNumber(Double($0)) } ?? "-", "MRR, kr.")
-                figure("\(d["bilag_klar"].int ?? 0)", "Bilag klar")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.s1), count: 3), alignment: .leading, spacing: Theme.s2) {
+                ForEach(Kategori.all) { k in KategoriCell(k: k, now: d["i_dag"][k.key].int, before: d["i_gaar"][k.key].int) }
             }
+            .padding(.top, 4)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private func figure(_ v: String, _ label: String, delta: (Int, Int)? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(v).font(Theme.mono(16, .medium)).monospacedDigit().foregroundStyle(Theme.ink).lineLimit(1).minimumScaleFactor(0.7)
-                if let delta { Delta(now: delta.0, before: delta.1) }
-            }
-            Text(label).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1).minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var skeleton: some View {
@@ -152,9 +140,8 @@ struct TodayDetail: View {
         let d = store.idag
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.s4) {
-                block("Klaret", "Opgaver og beslutninger klaret pr. dag", series(d, "klaret", last: 30))
-                block("Mails besvaret", "Svar sendt pr. dag", series(d, "mails", last: 30))
-                block("Bilag registreret", "Købsbilag fanget eller uploadet pr. dag", series(d, "bilag", last: 30))
+                block("I alt", "Alt det, systemet har klaret pr. dag", series(d, "klaret", last: 30))
+                ForEach(Kategori.all) { k in block(k.label, k.forklaring, series(d, k.key, last: 30)) }
                 VStack(alignment: .leading, spacing: Theme.s1) {
                     Text("Kunder og opkald").font(Theme.section).foregroundStyle(Theme.ink)
                     Rows {
@@ -198,5 +185,49 @@ struct TodayDetail: View {
     private func monthName(_ iso: String) -> String {
         guard let d = ACTDate.parse(iso) else { return iso }
         return d.formatted(.dateTime.month(.wide).year().locale(Locale(identifier: "da_DK")))
+    }
+}
+
+/// The six things the system does, counted from actual events in ACT (see /api/app/idag).
+struct Kategori: Identifiable {
+    let key: String
+    let label: String
+    let forklaring: String
+    let brand: String?
+    let symbol: String
+    var id: String { key }
+    static let all: [Kategori] = [
+        Kategori(key: "mails", label: "Mails besvaret", forklaring: "Svar sendt pr. dag", brand: "brand-gmail", symbol: "envelope"),
+        Kategori(key: "bilag", label: "Bilag i Dinero", forklaring: "Kladder lagt i Dinero og bilag bogført pr. dag", brand: "brand-dinero", symbol: "doc.text"),
+        Kategori(key: "dokumenter", label: "Fakturaer og kontrakter", forklaring: "Fakturaer lagt i Dinero og kontrakter sendt pr. dag", brand: nil, symbol: "signature"),
+        Kategori(key: "opgaver", label: "Opgaver løst", forklaring: "Opgaver agenterne har gjort færdige pr. dag", brand: nil, symbol: "checkmark.circle"),
+        Kategori(key: "leads", label: "Leads", forklaring: "Leads fundet og kontaktet pr. dag", brand: nil, symbol: "person.badge.plus"),
+        Kategori(key: "beslutninger", label: "Beslutninger", forklaring: "Beslutninger godkendt, afvist eller besvaret pr. dag", brand: nil, symbol: "checkmark.seal"),
+    ]
+}
+
+/// One cell of the breakdown: icon or logo, number, label. Bright when above 0, quiet when 0.
+struct KategoriCell: View {
+    let k: Kategori
+    let now: Int?
+    let before: Int?
+    var body: some View {
+        let n = now ?? 0
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Group {
+                    if let b = k.brand { Image(b).resizable().scaledToFit() }
+                    else { Image(systemName: k.symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.sec) }
+                }
+                .frame(width: 18, height: 18)
+                Text(now.map { "\($0)" } ?? "-").font(Theme.mono(17, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
+                if let before { Delta(now: n, before: before).scaleEffect(0.85, anchor: .leading) }
+            }
+            Text(k.label).font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(n > 0 ? 1 : 0.4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(k.label): \(n)")
     }
 }
