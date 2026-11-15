@@ -353,4 +353,66 @@ platform :ios do
     end
     UI.message("Intern testers now: #{Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: group.id }).map { |t| mask.(t.email) }.join(', ')}")
   end
+
+  # TestFlight feedback and crashes for Kaneo ACT. The repo (and so this log) is public, so the
+  # details are encrypted to fastlane/feedback-pub.pem (RSA-OAEP + AES-256-GCM); only counts are
+  # printed in clear. The private key lives on the VPS only.
+  desc "Kaneo ACT — TestFlight feedback and crash reports, encrypted to the VPS key"
+  lane :kaneoact_feedback do
+    require "openssl"
+    require "json"
+    require "base64"
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key: ENV["ASC_KEY_P8"])
+    app = Spaceship::ConnectAPI::App.find("com.getstubbie.kaneoact")
+    UI.user_error!("no App Store Connect record for com.getstubbie.kaneoact") unless app
+    tf = Spaceship::ConnectAPI.client.test_flight_request_client
+    out = {}
+    { "crashes" => "betaFeedbackCrashSubmissions", "screenshots" => "betaFeedbackScreenshotSubmissions" }.each do |k, rel|
+      begin
+        r = tf.get("v1/apps/#{app.id}/#{rel}", { limit: 50 })
+        items = (r.body["data"] || [])
+        out[k] = items
+        UI.message("#{k}: #{items.size}")
+        if k == "crashes"
+          items.first(10).each do |c|
+            begin
+              log = tf.get("v1/betaFeedbackCrashSubmissions/#{c['id']}/crashLog").body
+              c["crashLog"] = log["data"] && log["data"]["attributes"]
+            rescue => e
+              c["crashLogError"] = e.message[0, 200]
+            end
+          end
+        end
+      rescue => e
+        out[k + "_error"] = e.message[0, 300]
+        UI.important("#{k}: #{e.message[0, 200]}")
+      end
+    end
+    begin
+      builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, sort: "-uploadedDate", limit: 3)
+      builds.each do |b|
+        begin
+          r = tf.get("v1/builds/#{b.id}/diagnosticSignatures")
+          out["diagnostics_#{b.version}"] = r.body["data"]
+          UI.message("build #{b.version} diagnostic signatures: #{(r.body['data'] || []).size}")
+        rescue => e
+          UI.message("build #{b.version} diagnostics: #{e.message[0, 120]}")
+        end
+      end
+    rescue => e
+      UI.message("diagnostics: #{e.message[0, 120]}")
+    end
+    pub = OpenSSL::PKey::RSA.new(File.read(File.expand_path("feedback-pub.pem", __dir__)))
+    key = OpenSSL::Random.random_bytes(32); iv = OpenSSL::Random.random_bytes(12)
+    c = OpenSSL::Cipher.new("aes-256-gcm").encrypt; c.key = key; c.iv = iv
+    data = c.update(JSON.generate(out)) + c.final
+    blob = {
+      k: Base64.strict_encode64(pub.encrypt(key, rsa_padding_mode: "oaep")),
+      iv: Base64.strict_encode64(iv), tag: Base64.strict_encode64(c.auth_tag), d: Base64.strict_encode64(data)
+    }
+    puts "FEEDBACK-BLOB-BEGIN"
+    Base64.strict_encode64(JSON.generate(blob)).scan(/.{1,4000}/).each { |l| puts "FBL:" + l }
+    puts "FEEDBACK-BLOB-END"
+  end
 end

@@ -242,9 +242,7 @@ struct MainTabs: View {
             MoreView().tabItem { Label("Mere", systemImage: "person") }.tag(Tab.mere)
         }
         .tabBarMinimizeIfAvailable()
-        .overlay(alignment: .bottomTrailing) {
-            if router.tab != .neo { NeoButton().padding(.trailing, Theme.s3).padding(.bottom, 64) }
-        }
+
         .task { Push.shared.ask(); await store.load() }
         .onChange(of: router.stamp) { _, _ in Task { await store.load() } }
     }

@@ -96,6 +96,16 @@ struct WaitItem: Identifiable {
         case .frist: return "Marker som færdig"
         }
     }
+    /// The same action in one or two words, for the button on the row.
+    var short: String? {
+        guard primary != nil else { return nil }
+        switch kind {
+        case .mail: return "Send"
+        case .beslutning: return "Godkend"
+        case .bilag: return bilagStatus == "kladde" ? "Opret kladde" : "Bogfør"
+        case .frist: return "Færdig"
+        }
+    }
     /// Swipe left.
     var secondary: String {
         switch kind { case .frist: return "Udsæt til i morgen"; default: return "Afvis" }
@@ -218,31 +228,105 @@ extension Store {
 }
 
 // MARK: - The screen
+// Radically simple (Marco on build 102): one short line, then at most five rows, most urgent first,
+// and "Vis alle". Each row: small logo, one line of title, one grey line, one button on the right.
+// Everything else (Mere, Spørg Neo) sits in the row's long-press menu; search hides behind the
+// magnifier. Brief, deadlines and economy live under Mere.
 struct ToDigView: View {
     @ObservedObject private var store = Store.shared
     @ObservedObject private var mail = MailModel.shared
     @ObservedObject private var bilag = Store.bilagLoader
     @ObservedObject private var pending = Pending.shared
-    @ObservedObject private var api = API.shared
-    @AppStorage("hints.done") private var hintsDone = false
-    @State private var query = ""
     @State private var confirm: WaitItem?
     @State private var answer: JSON?
     @State private var path: [NavTarget] = []
+    @State private var showAll = false
+    @State private var searching = false
 
     private var visible: [WaitItem] { store.items.filter { !pending.hidden.contains($0.key) } }
-    private var firstName: String { api.name.split(separator: " ").first.map(String.init) ?? "Marco" }
 
     var body: some View {
         NavigationStack(path: $path) {
             List { rows }
-            .listStyle(.plain)
-            .screen()
-            .contentMargins(.bottom, 80, for: .scrollContent)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Søg i opgaver, mails, bilag og beslutninger")
-            .refreshable { await store.load() }
-            .navigationTitle("Til dig")
-            .navigationDestination(for: NavTarget.self) { $0.view }
+                .listStyle(.plain)
+                .screen()
+                .refreshable { await store.load() }
+                .navigationTitle("Til dig")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { searching = true } label: { Image(systemName: "magnifyingglass") }
+                            .accessibilityLabel("Søg")
+                    }
+                }
+                .navigationDestination(for: NavTarget.self) { $0.view }
+                .modifier(ToDigDialogs(confirm: $confirm, answer: $answer, searching: $searching))
+        }
+    }
+
+    @ViewBuilder private var rows: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(headline).font(Theme.sans(17, .medium)).foregroundStyle(Theme.sec)
+            if store.overblik["pause"]["pause"].bool {
+                Text("Agenterne er på pause.").font(Theme.small).foregroundStyle(Theme.dim)
+            }
+        }
+        .padding(.top, Theme.s1).padding(.bottom, Theme.s3)
+        .listRowInsets(EdgeInsets(top: 0, leading: Theme.s3, bottom: 0, trailing: Theme.s3))
+        .listRowBackground(Color.clear).listRowSeparator(.hidden)
+
+        if let e = store.error { ErrorLine(text: e).plainRow() }
+        if !store.loaded {
+            SkeletonRows(count: 4).plainRow()
+        } else {
+            ForEach(showAll ? visible : Array(visible.prefix(5))) { it in
+                WaitRow(it: it, open: { path.append(target(it)) }, run: { run(it) }, answer: { answer = it.json })
+                    .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
+                    .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if let p = it.primary {
+                            Button { run(it) } label: { Label(p, systemImage: "checkmark") }.tint(Theme.ok)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button { Act.secondary(it) } label: {
+                            Label(it.secondary, systemImage: it.kind == .frist ? "clock.arrow.circlepath" : "xmark")
+                        }
+                        .tint(it.kind == .frist ? Theme.warn : Theme.bad)
+                    }
+            }
+            if visible.count > 5 {
+                Button { withAnimation(.easeOut(duration: 0.2)) { showAll.toggle() } } label: {
+                    Text(showAll ? "Vis færre" : "Vis alle (\(visible.count))").font(Theme.sans(15, .medium)).foregroundStyle(Theme.sec)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear).listRowSeparator(.hidden)
+            }
+        }
+    }
+
+    private var headline: String {
+        guard store.loaded else { return " " }
+        switch visible.count {
+        case 0: return "Alt er klaret."
+        case 1: return "1 ting venter på dig."
+        default: return "\(visible.count) ting venter på dig."
+        }
+    }
+
+    private func run(_ it: WaitItem) {
+        if it.primary == nil { return }
+        if it.primaryNeedsConfirm { confirm = it } else { Task { await Act.primary(it) } }
+    }
+}
+
+/// The confirm dialog, the answer sheet and the search sheet, kept out of the main body.
+struct ToDigDialogs: ViewModifier {
+    @Binding var confirm: WaitItem?
+    @Binding var answer: JSON?
+    @Binding var searching: Bool
+    func body(content: Content) -> some View {
+        content
             .confirmationDialog(confirm.map { Act.confirmText($0) } ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
                 if let it = confirm {
                     Button(it.primary ?? "Fortsæt") { Task { await Act.primary(it) } }
@@ -250,70 +334,29 @@ struct ToDigView: View {
                 }
             }
             .sheet(item: Binding(get: { answer.map { Wrapped(json: $0) } }, set: { answer = $0?.json })) { w in AnswerSheet(c: w.json) }
-        }
+            .sheet(isPresented: $searching) { SearchSheet() }
     }
+}
 
-    @ViewBuilder private var rows: some View {
-            if !query.isEmpty {
-                SearchResults(query: query)
-            } else {
-                header.plainRow()
-                if !hintsDone { Hints(done: { withAnimation { hintsDone = true } }).plainRow() }
-                if let e = store.error { ErrorLine(text: e).plainRow() }
-                if store.overblik["pause"]["pause"].bool {
-                    Banner(title: "Alle agenter er på pause.", text: "Ingen opgaver tages, før du genoptager dem under Mere, Agenter.", tone: .warn).plainRow()
-                }
-                if !store.loaded {
-                    SkeletonRows(count: 4).plainRow()
-                } else if visible.isEmpty {
-                    EmptyState(icon: "checkmark.circle", title: "Du er helt med",
-                               text: "Når en mail, en beslutning, et bilag eller en frist venter på dig, står den her.").plainRow()
+struct SearchSheet: View {
+    @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                if query.isEmpty {
+                    Text("Søg i opgaver, mails, bilag og beslutninger.").font(Theme.small).foregroundStyle(Theme.dim).plainRow()
                 } else {
-                    ForEach(visible) { it in
-                        WaitRow(it: it, open: { path.append(target(it)) }, run: { run(it) }, answer: { answer = it.json })
-                            .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
-                            .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                if let p = it.primary {
-                                    Button { run(it) } label: { Label(p, systemImage: "checkmark") }.tint(Theme.ok)
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button { Act.secondary(it) } label: {
-                                    Label(it.secondary, systemImage: it.kind == .frist ? "clock.arrow.circlepath" : "xmark")
-                                }
-                                .tint(it.kind == .frist ? Theme.warn : Theme.bad)
-                            }
-                    }
+                    SearchResults(query: query)
                 }
             }
-    }
-
-    private func run(_ it: WaitItem) {
-        if it.primary == nil { return }
-        if it.primaryNeedsConfirm { confirm = it } else { Task { await Act.primary(it) } }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Hej, \(firstName)").font(Theme.sans(15, .medium)).foregroundStyle(Theme.sec)
-            HStack(alignment: .firstTextBaseline, spacing: Theme.s1) {
-                Text("\(visible.count)").font(Theme.hero).monospacedDigit().foregroundStyle(Theme.ink)
-                    .contentTransition(.numericText())
-                Text(visible.count == 1 ? "ting venter på dig" : "ting venter på dig").font(Theme.sans(17, .medium)).foregroundStyle(Theme.sec)
-            }
-            .accessibilityElement(children: .combine)
-            Text(summary).font(Theme.small).foregroundStyle(Theme.dim)
+            .listStyle(.plain)
+            .screen()
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Søg")
+            .navigationTitle("Søg").navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: NavTarget.self) { $0.view }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Luk") { dismiss() } } }
         }
-        .padding(.top, Theme.s1)
-        .animation(.easeOut(duration: 0.3), value: visible.count)
-    }
-
-    private var summary: String {
-        let c = Dictionary(grouping: visible, by: \.kind).mapValues(\.count)
-        let parts: [(WaitItem.Kind, String, String)] = [(.mail, "mail", "mails"), (.beslutning, "beslutning", "beslutninger"), (.bilag, "bilag", "bilag"), (.frist, "frist", "frister")]
-        let s = parts.compactMap { p in c[p.0].map { "\($0) \($0 == 1 ? p.1 : p.2)" } }.joined(separator: " · ")
-        return s.isEmpty ? "Det mest hastende står øverst." : s + ". Det mest hastende står øverst."
     }
 }
 
@@ -346,115 +389,82 @@ struct WaitRow: View {
     let answer: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            // Tap gesture, not a NavigationLink: in a List row a link would swallow the buttons below.
-            HStack(alignment: .top, spacing: Theme.s2) {
+        HStack(spacing: Theme.s2) {
+            HStack(spacing: Theme.s2) {
                 icon
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(it.title).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(it.subtitle).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
+                    Text(it.title).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let t = tone { Dot(tone: t) }
+                        Text(subline).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: Theme.s1)
-                due
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: open)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: "Åbn", open)
-            HStack(spacing: Theme.s1) {
-                if let p = it.primary {
-                    Button(action: run) { Text(p) }.buttonStyle(.primary)
-                } else {
-                    Button(action: open) { Text("Åbn") }.buttonStyle(.secondary)
-                }
-                more
+            if let s = it.short {
+                Button(action: run) { Text(s) }
+                    .buttonStyle(PillButton(kind: .primary, full: false))
+                    .accessibilityLabel(it.primary ?? s)
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(it.kindName). \(it.title). \(it.subtitle)")
+        .contextMenu { menu }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(it.kindName). \(it.title). \(subline)")
+        .accessibilityAction(named: "Åbn", open)
+        .accessibilityAction(named: "Spørg Neo om dette") { Act.askNeo(it) }
+    }
+
+    /// Grey line: what it is and when.
+    private var subline: String {
+        var p = [it.subtitle]
+        if let d = it.due {
+            if it.kind == .mail { p.append("svar inden \(ACTDate.time(d))") }
+            else if it.kind == .bilag { p.append("bogføres \(ACTDate.dayText(d))") }
+            else { p.append(ACTDate.dayText(d)) }
+        }
+        return p.joined(separator: " · ")
+    }
+
+    /// The only colour on the screen: a status dot. Amber = today or a running countdown, red = overdue.
+    private var tone: Tone? {
+        guard let d = it.due else { return nil }
+        if d < (it.kind == .mail ? Date() : Calendar.current.startOfDay(for: Date())) { return .bad }
+        if it.kind == .mail || Calendar.current.isDateInToday(d) { return .warn }
+        return nil
     }
 
     @ViewBuilder private var icon: some View {
         switch it.kind {
-        case .beslutning, .frist: BrandIcon(item: it.json, size: 36)
-        case .mail: Initials(name: it.json["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? it.json["fra"].text)
+        case .beslutning, .frist: BrandIcon(item: it.json, size: 28)
+        case .mail: Initials(name: it.json["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? it.json["fra"].text, size: 28)
         case .bilag:
-            ZStack { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised); Image(systemName: "doc.text").foregroundStyle(Theme.sec) }
-                .frame(width: 36, height: 36)
+            ZStack { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.raised); Image(systemName: "doc.text").font(.system(size: 13)).foregroundStyle(Theme.sec) }
+                .frame(width: 28, height: 28)
         }
     }
 
-    @ViewBuilder private var due: some View {
-        if it.kind == .mail {
-            CountdownPill(deadline: it.due, skew: MailModel.shared.skew)
-        } else if let d = it.due {
-            let over = d < Calendar.current.startOfDay(for: Date())
-            Chip(text: it.kind == .bilag ? "Bogføres \(ACTDate.dayText(d))" : ACTDate.dayText(d),
-                 tone: over ? .bad : Calendar.current.isDateInToday(d) ? .warn : .neutral)
+    @ViewBuilder private var menu: some View {
+        Button(action: open) { Label("Åbn", systemImage: "arrow.up.right") }
+        if let p = it.primary { Button(action: run) { Label(p, systemImage: "checkmark") } }
+        switch it.kind {
+        case .beslutning:
+            Button { answer() } label: { Label("Svar med egne ord", systemImage: "arrowshape.turn.up.left") }
+        case .mail:
+            Button(action: open) { Label("Ret svaret først", systemImage: "pencil") }
+        case .bilag where it.bilagStatus == "venter":
+            Button { Pending.shared.later(it.key, "Stoppet. Bilaget venter på dig", reject: true) { _ = try await API.shared.send("api/bilag/\(it.json["id"].text)/stop") } }
+                label: { Label("Stop bogføringen", systemImage: "hand.raised") }
+        case .frist:
+            Button { Act.postpone(it, days: 7) } label: { Label("Udsæt en uge", systemImage: "calendar.badge.clock") }
+        default: EmptyView()
         }
-    }
-
-    private var more: some View {
-        Menu {
-            Button(action: open) { Label("Åbn", systemImage: "arrow.up.right") }
-            switch it.kind {
-            case .beslutning:
-                Button { answer() } label: { Label("Svar med egne ord", systemImage: "arrowshape.turn.up.left") }
-            case .mail:
-                Button(action: open) { Label("Ret svaret først", systemImage: "pencil") }
-            case .bilag where it.bilagStatus == "venter":
-                Button { Pending.shared.later(it.key, "Stoppet. Bilaget venter på dig", reject: true) { _ = try await API.shared.send("api/bilag/\(it.json["id"].text)/stop") } }
-                    label: { Label("Stop bogføringen", systemImage: "hand.raised") }
-            case .frist:
-                Button { Act.postpone(it, days: 7) } label: { Label("Udsæt en uge", systemImage: "calendar.badge.clock") }
-            default: EmptyView()
-            }
-            Button { Act.askNeo(it) } label: { Label("Spørg Neo om dette", systemImage: "waveform") }
-            Divider()
-            Button(role: it.kind == .frist ? nil : .destructive) { Act.secondary(it) } label: {
-                Label(it.secondary, systemImage: it.kind == .frist ? "clock.arrow.circlepath" : "xmark")
-            }
-        } label: {
-            Text("Mere").font(Theme.button).foregroundStyle(Theme.ink)
-                .frame(minWidth: 72, minHeight: 44).background(Theme.raised, in: Capsule())
+        Button { Act.askNeo(it) } label: { Label("Spørg Neo om dette", systemImage: "waveform") }
+        Divider()
+        Button(role: it.kind == .frist ? nil : .destructive) { Act.secondary(it) } label: {
+            Label(it.secondary, systemImage: it.kind == .frist ? "clock.arrow.circlepath" : "xmark")
         }
-        .accessibilityLabel("Flere handlinger")
-    }
-}
-
-// MARK: - First time: three short hints, never again afterwards
-struct Hints: View {
-    let done: () -> Void
-    @State private var page = 0
-    private let cards: [(String, String, String)] = [
-        ("tray.full", "Alt, der venter, står her", "Mails, beslutninger, bilag og frister i én liste. Det mest hastende står øverst."),
-        ("hand.draw", "Swipe for at handle", "Til højre gør du det, knappen siger. Til venstre afviser eller udsætter du. Du kan fortryde i 5 sekunder."),
-        ("waveform", "Neo er ét tryk væk", "Tryk på den orange knap nederst. Skriv @ for at svare på en beslutning."),
-    ]
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            HStack(alignment: .top, spacing: Theme.s2) {
-                Image(systemName: cards[page].0).font(.system(size: 20)).foregroundStyle(Theme.ink)
-                    .frame(width: 40, height: 40).background(Theme.raised, in: Circle())
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(cards[page].1).font(Theme.cardTitle).foregroundStyle(Theme.ink)
-                    Text(cards[page].2).font(Theme.small).foregroundStyle(Theme.sec).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .id(page).transition(.opacity)
-            HStack {
-                HStack(spacing: 6) { ForEach(0..<cards.count, id: \.self) { i in Circle().fill(i == page ? Theme.ink : Theme.lineStrong).frame(width: 6, height: 6) } }
-                    .accessibilityHidden(true)
-                Spacer()
-                Button("Spring over", action: done).font(Theme.sans(14, .medium)).foregroundStyle(Theme.sec).frame(minHeight: 44).buttonStyle(.plain)
-                Button(page == cards.count - 1 ? "Forstået" : "Næste") {
-                    if page == cards.count - 1 { done() } else { withAnimation(.easeOut(duration: 0.2)) { page += 1 } }
-                }
-                .buttonStyle(PillButton(kind: .primary, full: false))
-            }
-        }
-        .card()
-        .accessibilityElement(children: .contain)
     }
 }
 
@@ -503,17 +513,5 @@ struct SearchResults: View {
         if !tasks.isEmpty {
             Section("Opgaver") { ForEach(Array(tasks), id: \.self) { c in NavigationLink(value: NavTarget.item(c)) { ItemRow(c: c) } } }
         }
-    }
-}
-
-// MARK: - Neo, one tap away on every screen
-struct NeoButton: View {
-    var body: some View {
-        Button { Haptic.tap(); Router.shared.askNeo(nil) } label: {
-            KTile(size: 52).shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                .frame(width: 60, height: 60)
-        }
-        .buttonStyle(Press())
-        .accessibilityLabel("Spørg Neo")
     }
 }

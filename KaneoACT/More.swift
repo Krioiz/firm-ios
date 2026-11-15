@@ -35,11 +35,16 @@ struct MoreView: View {
                         Spacer()
                     }
                     .padding(.bottom, Theme.s2)
+                    SectionHead(title: "Overblik")
+                    Rows {
+                        NavigationLink { BriefView() } label: { NavRow(icon: "sun.horizon", title: "Morgenbrief") }.buttonStyle(Press())
+                        NavigationLink { DeadlinesView() } label: { NavRow(icon: "calendar", title: "Frister") }.buttonStyle(Press())
+                        NavigationLink { EconomyView() } label: { NavRow(icon: "chart.bar", title: "Økonomi") }.buttonStyle(Press())
+                    }
                     SectionHead(title: "Kaneo ACT")
                     Rows {
                         NavigationLink { BilagView() } label: { NavRow(icon: "doc.text", title: "Bilag") }.buttonStyle(Press())
                         NavigationLink { AgentsView() } label: { NavRow(icon: "person.2", title: "Agenter") }.buttonStyle(Press())
-                        NavigationLink { EconomyView() } label: { NavRow(icon: "chart.bar", title: "Økonomi") }.buttonStyle(Press())
                     }
                     SectionHead(title: "Konto")
                     Rows {
@@ -491,6 +496,65 @@ struct SettingsView: View {
             let s = await UNUserNotificationCenter.current().notificationSettings()
             notif = s.authorizationStatus == .authorized ? "Tilladt" : s.authorizationStatus == .denied ? "Slået fra" : "Ikke spurgt"
             if s.authorizationStatus == .authorized { Push.shared.ask() }
+        }
+    }
+}
+
+// MARK: - Morgenbrief and Frister (moved here from the first screen)
+struct BriefView: View {
+    @ObservedObject private var store = Store.shared
+    var body: some View {
+        ScrollView {
+            Text(clean(store.overblik["brief"].string.flatMap { $0.isEmpty ? nil : $0 } ?? "Morgenbriefen kommer kl. 07."))
+                .font(Theme.body).foregroundStyle(Theme.ink).lineSpacing(5).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.s4)
+        }
+        .screen()
+        .refreshable { await store.load() }
+        .navigationTitle("Morgenbrief")
+    }
+}
+
+struct DeadlinesView: View {
+    @StateObject private var l = Loader("api/frister")
+    var body: some View {
+        let all = l.data["frister"].array
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if let e = l.error { ErrorLine(text: e) }
+                if !l.loaded { SkeletonRows(count: 5) }
+                else if all.isEmpty {
+                    EmptyState(icon: "calendar", title: "Ingen frister", text: "Når en opgave, en moms- eller kundefrist nærmer sig, står den her.")
+                } else {
+                    Rows {
+                        ForEach(all, id: \.self) { f in DeadlineRow(f: f) }
+                    }
+                }
+            }
+            .padding(Theme.s3)
+        }
+        .screen()
+        .navigationTitle("Frister")
+        .task { await l.load() }
+        .refreshable { await l.load() }
+    }
+}
+
+struct DeadlineRow: View {
+    let f: JSON
+    var body: some View {
+        let d = f["dato"].date
+        let over = d.map { $0 < Calendar.current.startOfDay(for: Date()) } ?? false
+        HStack(spacing: Theme.s2) {
+            if over { Dot(tone: .bad) } else if d.map({ Calendar.current.isDateInToday($0) }) ?? false { Dot(tone: .warn) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(clean(f["titel"].text)).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(2)
+                Text([f["kode"].string, f["ansvarlig"].string, f["type"].text == "fast" ? "fast frist" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
+            }
+            Spacer()
+            Text(d.map { ACTDate.dayText($0) } ?? f["dato"].text).font(Theme.mono(12)).foregroundStyle(over ? Theme.bad : Theme.sec)
         }
     }
 }
