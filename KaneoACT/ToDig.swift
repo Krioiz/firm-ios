@@ -264,6 +264,10 @@ struct ToDigView: View {
     }
 
     @ViewBuilder private var rows: some View {
+        QuickGrid()
+            .listRowInsets(EdgeInsets(top: Theme.s1, leading: 0, bottom: Theme.s3, trailing: 0))
+            .listRowBackground(Color.clear).listRowSeparator(.hidden)
+
         Button { path.append(.idag) } label: {
             TodayCard(d: store.idag, loaded: store.idagLoaded, failed: store.idagFailed)
         }
@@ -272,9 +276,6 @@ struct ToDigView: View {
         .listRowInsets(EdgeInsets(top: Theme.s1, leading: Theme.s3, bottom: Theme.s3, trailing: Theme.s3))
         .listRowBackground(Color.clear).listRowSeparator(.hidden)
 
-        QuickGrid()
-            .listRowInsets(EdgeInsets(top: 0, leading: Theme.s3, bottom: Theme.s3, trailing: Theme.s3))
-            .listRowBackground(Color.clear).listRowSeparator(.hidden)
 
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(Theme.sans(17, .medium)).foregroundStyle(Theme.sec)

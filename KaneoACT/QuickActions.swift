@@ -10,6 +10,21 @@ enum QuickAction: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .neo: return "Neo"
+        case .opgave: return "Opgave"
+        case .scan: return "Kvittering"
+        case .bogfoer: return "Bogfør"
+        case .faktura: return "Faktura"
+        case .kontrakt: return "Kontrakt"
+        case .mails: return "Mails"
+        case .dikter: return "Diktér"
+        case .leads: return "Leads"
+        case .pause: return "Pause"
+        }
+    }
+    /// The full name, for VoiceOver.
+    var spoken: String {
+        switch self {
         case .neo: return "Spørg Neo"
         case .opgave: return "Ny opgave"
         case .scan: return "Scan kvittering"
@@ -19,7 +34,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
         case .mails: return "Svar på mails"
         case .dikter: return "Diktér note"
         case .leads: return "Find leads"
-        case .pause: return "Pause alle"
+        case .pause: return "Pause alle agenter"
         }
     }
     var icon: String {
@@ -70,6 +85,8 @@ enum QuickAsk: String, Identifiable { case leads, pause; var id: String { rawVal
     }
 }
 
+/// One row of round buttons at the top of "Til dig". About 4.5 show at once, so the half circle at
+/// the edge says there are more; swiping snaps to whole buttons. Long press and drag to reorder.
 struct QuickGrid: View {
     @AppStorage("quick.order") private var stored = ""
     @ObservedObject private var store = Store.shared
@@ -82,12 +99,13 @@ struct QuickGrid: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHGrid(rows: [GridItem(.fixed(86), spacing: Theme.s2), GridItem(.fixed(86), spacing: Theme.s2)], spacing: Theme.s1) {
+            LazyHStack(alignment: .top, spacing: 0) {
                 ForEach(order) { a in
-                    Button { Quick.run(a) } label: { tile(a) }
+                    Button { Quick.run(a) } label: { circle(a) }
                         .buttonStyle(Press())
-                        .containerRelativeFrame(.horizontal, count: 4, spacing: Theme.s1)
-                        .draggable(a.rawValue) { tile(a).frame(width: 80) }
+                        // 9 columns, 2 per button = 4.5 buttons in view
+                        .containerRelativeFrame(.horizontal, count: 9, span: 2, spacing: 0)
+                        .draggable(a.rawValue) { circle(a).frame(width: 76) }
                         .dropDestination(for: String.self) { items, _ in
                             guard let src = items.first.flatMap(QuickAction.init(rawValue:)), src != a else { return false }
                             var o = order
@@ -97,32 +115,39 @@ struct QuickGrid: View {
                             Haptic.tap()
                             return true
                         }
-                        .accessibilityLabel(label(a))
+                        .accessibilityLabel(a == .pause && store.overblik["pause"]["pause"].bool ? "Genoptag alle agenter" : a.spoken)
                         .accessibilityHint("Hold og træk for at flytte")
                 }
             }
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.viewAligned)
-        .frame(height: 86 * 2 + Theme.s2)
+        .contentMargins(.horizontal, Theme.s1, for: .scrollContent)
+        .frame(height: 92)
     }
 
     private func label(_ a: QuickAction) -> String {
-        a == .pause && store.overblik["pause"]["pause"].bool ? "Genoptag alle" : a.title
+        a == .pause && store.overblik["pause"]["pause"].bool ? "Genoptag" : a.title
     }
 
-    private func tile(_ a: QuickAction) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: a == .pause && store.overblik["pause"]["pause"].bool ? "play.circle" : a.icon)
-                .font(.system(size: 20, weight: .regular)).foregroundStyle(Theme.ink)
-                .frame(width: 52, height: 52)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Theme.line))
+    private func circle(_ a: QuickAction) -> some View {
+        let neo = a == .neo
+        return VStack(spacing: 8) {
+            ZStack {
+                Circle().fill(neo ? Theme.tile : Color.dyn(0xf0f0f0, 0x1f1f1f))
+                if neo {
+                    Image("KMark").resizable().renderingMode(.template).scaledToFit().foregroundStyle(.white).frame(height: 24)
+                } else {
+                    Image(systemName: a == .pause && store.overblik["pause"]["pause"].bool ? "play.fill" : a.icon)
+                        .font(.system(size: 21, weight: .regular)).foregroundStyle(Theme.ink)
+                }
+            }
+            .frame(width: 58, height: 58)
             Text(label(a)).font(Theme.sans(11, .medium)).foregroundStyle(Theme.sec)
-                .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.85)
+                .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, minHeight: 86, alignment: .top)
+        .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
     }
 }
