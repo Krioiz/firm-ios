@@ -290,7 +290,14 @@ platform :ios do
     if group
       UI.message("group Intern exists (internal=#{group.is_internal_group}, all builds=#{group.has_access_to_all_builds.inspect})")
     else
-      group = app.create_beta_group(group_name: "Intern", is_internal_group: true, has_access_to_all_builds: true)
+      # Spaceship's create_beta_group always sends public-link fields, which Apple rejects for an
+      # internal group ("Public link limit cannot be applied to internal group"), so post it raw.
+      body = { data: { type: "betaGroups",
+                       attributes: { name: "Intern", isInternalGroup: true, hasAccessToAllBuilds: true },
+                       relationships: { app: { data: { type: "apps", id: app.id } } } } }
+      Spaceship::ConnectAPI.client.test_flight_request_client.post("v1/betaGroups", body)
+      group = app.get_beta_groups.find { |g| g.name == "Intern" }
+      UI.user_error!("group Intern was not created") unless group
       UI.success("created internal group Intern with automatic distribution")
     end
 
