@@ -312,6 +312,13 @@ platform :ios do
     end
     emails.uniq!
     UI.message("internal testers on Firm/Tradster: #{emails.map(&mask).join(', ')}")
+    # None found: the team's own App Store Connect users (internal testers must be ASC users).
+    users = Spaceship::ConnectAPI::User.all
+    users.each { |u| UI.message("ASC user #{mask.(u.username)} roles=#{(u.roles || []).join('/')}") }
+    if emails.empty?
+      emails = users.map(&:username).compact
+    end
+    user_by_mail = users.to_h { |u| [u.username.to_s.downcase, u] }
     have = Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: group.id }).map { |t| t.email.to_s.downcase }
     emails.each do |em|
       if have.include?(em.downcase)
@@ -319,7 +326,11 @@ platform :ios do
         next
       end
       begin
-        Spaceship::ConnectAPI.post_beta_tester_assignment(beta_group_ids: [group.id], attributes: { email: em })
+        u = user_by_mail[em.downcase]
+        attrs = { email: em }
+        attrs[:firstName] = u.first_name if u && u.first_name
+        attrs[:lastName] = u.last_name if u && u.last_name
+        Spaceship::ConnectAPI.post_beta_tester_assignment(beta_group_ids: [group.id], attributes: attrs)
         UI.success("added #{mask.(em)} to Intern")
       rescue => e
         UI.important("add #{mask.(em)}: #{e.message[0, 200]}")
