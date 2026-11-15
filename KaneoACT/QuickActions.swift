@@ -40,15 +40,15 @@ enum QuickAction: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .neo: return "waveform"
-        case .opgave: return "plus.circle"
-        case .scan: return "camera.viewfinder"
+        case .opgave: return "plus"
+        case .scan: return "camera"
         case .bogfoer: return "tray.and.arrow.down"
         case .faktura: return "doc.text"
         case .kontrakt: return "signature"
         case .mails: return "envelope"
         case .dikter: return "mic"
         case .leads: return "person.badge.plus"
-        case .pause: return "pause.circle"
+        case .pause: return "pause"
         }
     }
 }
@@ -96,16 +96,17 @@ struct QuickGrid: View {
         for a in QuickAction.allCases where !o.contains(a) { o.append(a) }
         return o
     }
+    private var paused: Bool { store.overblik["pause"]["pause"].bool }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(alignment: .top, spacing: 0) {
                 ForEach(order) { a in
-                    Button { Quick.run(a) } label: { circle(a) }
-                        .buttonStyle(Press())
-                        // 9 columns, 2 per button = 4.5 buttons in view
+                    Button { Quick.run(a) } label: { QuickCircle(a: a, paused: paused) }
+                        .buttonStyle(CirclePress())
+                        // 9 columns, 2 per button = 4.5 buttons in view, all exactly the same width
                         .containerRelativeFrame(.horizontal, count: 9, span: 2, spacing: 0)
-                        .draggable(a.rawValue) { circle(a).frame(width: 76) }
+                        .draggable(a.rawValue) { QuickCircle(a: a, paused: paused).frame(width: 76) }
                         .dropDestination(for: String.self) { items, _ in
                             guard let src = items.first.flatMap(QuickAction.init(rawValue:)), src != a else { return false }
                             var o = order
@@ -115,7 +116,7 @@ struct QuickGrid: View {
                             Haptic.tap()
                             return true
                         }
-                        .accessibilityLabel(a == .pause && store.overblik["pause"]["pause"].bool ? "Genoptag alle agenter" : a.spoken)
+                        .accessibilityLabel(a == .pause && paused ? "Genoptag alle agenter" : a.spoken)
                         .accessibilityHint("Hold og træk for at flytte")
                 }
             }
@@ -123,27 +124,51 @@ struct QuickGrid: View {
         }
         .scrollTargetBehavior(.viewAligned)
         .contentMargins(.horizontal, Theme.s1, for: .scrollContent)
-        .frame(height: 92)
+        // A soft fade at the right edge: there is more to swipe to.
+        .mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 36)
+            }
+        }
+        .frame(height: 96)
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
+}
 
-    private func label(_ a: QuickAction) -> String {
-        a == .pause && store.overblik["pause"]["pause"].bool ? "Genoptag" : a.title
+/// Pressed: a slight scale down; the tap itself gives the haptic (Quick.run).
+struct CirclePress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
+}
 
-    private func circle(_ a: QuickAction) -> some View {
+struct QuickCircle: View {
+    let a: QuickAction
+    let paused: Bool
+    var body: some View {
         let neo = a == .neo
-        return VStack(spacing: 8) {
+        VStack(spacing: Theme.s1) {
             ZStack {
                 Circle().fill(neo ? Theme.tile : Color.dyn(0xf0f0f0, 0x1f1f1f))
                 if neo {
-                    Image("KMark").resizable().renderingMode(.template).scaledToFit().foregroundStyle(.white).frame(height: 24)
+                    // The K leans right; a small nudge left centres it to the eye.
+                    Image("KMark").resizable().renderingMode(.template).scaledToFit()
+                        .foregroundStyle(.white).frame(height: 23).offset(x: -0.5)
                 } else {
-                    Image(systemName: a == .pause && store.overblik["pause"]["pause"].bool ? "play.fill" : a.icon)
-                        .font(.system(size: 21, weight: .regular)).foregroundStyle(Theme.ink)
+                    Image(systemName: a == .pause && paused ? "play.fill" : a.icon)
+                        .symbolRenderingMode(.monochrome)
+                        .font(.system(size: 20, weight: .regular))
+                        .imageScale(.medium)
+                        .frame(width: 26, height: 26)
+                        .foregroundStyle(Theme.ink)
                 }
             }
             .frame(width: 58, height: 58)
-            Text(label(a)).font(Theme.sans(11, .medium)).foregroundStyle(Theme.sec)
+            Text(a == .pause && paused ? "Genoptag" : a.title)
+                .font(Theme.sans(11, .medium)).foregroundStyle(Theme.sec)
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity)
         }

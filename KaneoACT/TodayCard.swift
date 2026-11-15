@@ -21,11 +21,11 @@ struct Delta: View {
     var body: some View {
         if now != before {
             let up = now > before
-            HStack(spacing: 2) {
-                Image(systemName: up ? "arrow.up" : "arrow.down").font(.system(size: 10, weight: .bold))
-                Text("\(abs(now - before))").font(Theme.mono(12, .medium))
+            HStack(spacing: 1) {
+                Image(systemName: up ? "arrow.up" : "arrow.down").font(.system(size: 8, weight: .bold))
+                Text("\(abs(now - before))").font(Theme.mono(10, .medium)).monospacedDigit()
             }
-            .foregroundStyle(up ? Theme.ok : Theme.bad)
+            .foregroundStyle((up ? Theme.ok : Theme.bad).opacity(0.85))
             .accessibilityLabel(up ? "\(now - before) flere end i går" : "\(before - now) færre end i går")
         }
     }
@@ -80,48 +80,51 @@ struct TodayCard: View {
     let loaded: Bool
     let failed: Bool
 
+    /// Zeros with the real shape: the skeleton is the card itself, redacted, so nothing jumps.
+    private static let placeholder: JSON = {
+        let days = (1...7).map { JSON.obj(["dato": .str("2026-01-0\($0)"), "klaret": .num(Double($0 % 3 + 1))]) }
+        let zero = JSON.obj(Dictionary(uniqueKeysWithValues: Kategori.all.map { ($0.key, JSON.num(0)) }))
+        return .obj(["klaret_i_dag": .num(0), "klaret_i_gaar": .num(0), "i_dag": zero, "i_gaar": zero, "dage": .arr(days)])
+    }()
+
     var body: some View {
         Group {
-            if !loaded { skeleton }
-            else if failed || d.isNull { empty }
-            else { content }
+            if loaded && (failed || d.isNull) { empty }
+            else { content(loaded ? d : Self.placeholder).redacted(reason: loaded ? [] : .placeholder) }
         }
         .padding(Theme.s3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line, lineWidth: 1))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.line, lineWidth: 1))
+        .animation(.easeOut(duration: 0.25), value: loaded)
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Det har systemet klaret i dag").font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec)
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.s1) {
-                        Text("\(d["klaret_i_dag"].int ?? 0)").font(Theme.mono(40, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
-                        Delta(now: d["klaret_i_dag"].int ?? 0, before: d["klaret_i_gaar"].int ?? 0)
+    private func content(_ d: JSON) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Det har systemet klaret i dag").font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(d["klaret_i_dag"].int ?? 0)").font(Theme.mono(44, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                Delta(now: d["klaret_i_dag"].int ?? 0, before: d["klaret_i_gaar"].int ?? 0)
+                Spacer()
+                Text("7 dage").font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim)
+            }
+            .padding(.top, 2)
+            Spark(points: series(d, "klaret", last: 7), height: 52)
+                .padding(.top, Theme.s2)
+            Rectangle().fill(Theme.line).frame(height: 1).padding(.vertical, Theme.s3)
+            Grid(alignment: .leading, horizontalSpacing: Theme.s2, verticalSpacing: Theme.s3) {
+                ForEach(0..<2, id: \.self) { r in
+                    GridRow {
+                        ForEach(Kategori.all[(r * 3)..<(r * 3 + 3)]) { k in
+                            KategoriCell(k: k, now: d["i_dag"][k.key].int, before: d["i_gaar"][k.key].int)
+                        }
                     }
                 }
-                Spacer()
-                Text("7 dage").font(Theme.meta).foregroundStyle(Theme.dim)
             }
-            Spark(points: series(d, "klaret", last: 7))
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.s1), count: 3), alignment: .leading, spacing: Theme.s2) {
-                ForEach(Kategori.all) { k in KategoriCell(k: k, now: d["i_dag"][k.key].int, before: d["i_gaar"][k.key].int) }
-            }
-            .padding(.top, 4)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var skeleton: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: 80, height: 10)
-            RoundedRectangle(cornerRadius: 6).fill(Theme.raised).frame(width: 64, height: 34)
-            RoundedRectangle(cornerRadius: 8).fill(Theme.raised).frame(height: 56)
-            HStack { ForEach(0..<3, id: \.self) { _ in RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: 70, height: 26); Spacer() } }
-        }
-        .accessibilityLabel("Henter dagens tal")
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 
     private var empty: some View {
@@ -213,20 +216,22 @@ struct KategoriCell: View {
     let before: Int?
     var body: some View {
         let n = now ?? 0
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Group {
-                    if let b = k.brand { Image(b).resizable().scaledToFit() }
-                    else { Image(systemName: k.symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.sec) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
+                ZStack {
+                    if let b = k.brand { Image(b).resizable().scaledToFit().frame(width: 16, height: 16) }
+                    else { Image(systemName: k.symbol).font(.system(size: 13, weight: .regular)).foregroundStyle(Theme.sec) }
                 }
                 .frame(width: 18, height: 18)
                 Text(now.map { "\($0)" } ?? "-").font(Theme.mono(17, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
-                if let before { Delta(now: n, before: before).scaleEffect(0.85, anchor: .leading) }
+                    .contentTransition(.numericText())
+                if let before { Delta(now: n, before: before) }
             }
-            Text(k.label).font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(k.label).font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim)
+                .lineLimit(2, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(n > 0 ? 1 : 0.4)
+        .opacity(n > 0 ? 1 : 0.38)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(k.label): \(n)")
     }

@@ -249,6 +249,8 @@ struct ToDigView: View {
         NavigationStack(path: $path) {
             List { rows }
                 .listStyle(.plain)
+                .animation(.easeOut(duration: 0.25), value: visible.map(\.key))
+                .animation(.easeOut(duration: 0.25), value: store.loaded)
                 .screen()
                 .refreshable { await store.load() }
                 .navigationTitle("Til dig")
@@ -289,7 +291,13 @@ struct ToDigView: View {
 
         if let e = store.error { ErrorLine(text: e).plainRow() }
         if !store.loaded {
-            SkeletonRows(count: 4).plainRow()
+            ForEach(0..<4, id: \.self) { i in
+                WaitRow(it: WaitItem(kind: .beslutning, key: "s\(i)", json: .null, title: "Indlæser det, der venter", subtitle: "Beslutning · i dag", due: nil),
+                        open: {}, run: {}, answer: {})
+                    .redacted(reason: .placeholder).allowsHitTesting(false)
+                    .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
+                    .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
+            }
         } else {
             ForEach(showAll ? visible : Array(visible.prefix(5))) { it in
                 WaitRow(it: it, open: { path.append(target(it)) }, run: { run(it) }, answer: { answer = it.json })
@@ -319,7 +327,7 @@ struct ToDigView: View {
     }
 
     private var headline: String {
-        guard store.loaded else { return " " }
+        guard store.loaded else { return "Henter det, der venter" }
         switch visible.count {
         case 0: return "Alt er klaret."
         case 1: return "1 ting venter på dig."
@@ -404,26 +412,32 @@ struct WaitRow: View {
     let answer: () -> Void
 
     var body: some View {
-        HStack(spacing: Theme.s2) {
-            HStack(spacing: Theme.s2) {
-                icon
+        HStack(alignment: .center, spacing: Theme.s2) {
+            HStack(alignment: .center, spacing: Theme.s2) {
+                icon.frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(it.title).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
+                    Text(it.title).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
                         if let t = tone { Dot(tone: t) }
                         Text(subline).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
                     }
                 }
+                // The hairline between rows starts at the text, after the logo.
+                .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                 Spacer(minLength: Theme.s1)
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: open)
             if let s = it.short {
-                Button(action: run) { Text(s) }
+                Button(action: run) { Text(s).frame(width: 84) }
                     .buttonStyle(PillButton(kind: .primary, full: false))
                     .accessibilityLabel(it.primary ?? s)
+            } else {
+                Color.clear.frame(width: 84 + Theme.s3 * 2, height: 1)
             }
         }
+        .frame(minHeight: 52)
         .contextMenu { menu }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(it.kindName). \(it.title). \(subline)")
@@ -452,11 +466,11 @@ struct WaitRow: View {
 
     @ViewBuilder private var icon: some View {
         switch it.kind {
-        case .beslutning, .frist: BrandIcon(item: it.json, size: 28)
-        case .mail: Initials(name: it.json["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? it.json["fra"].text, size: 28)
+        case .beslutning, .frist: BrandIcon(item: it.json, size: 32)
+        case .mail: Initials(name: it.json["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? it.json["fra"].text, size: 32)
         case .bilag:
-            ZStack { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.raised); Image(systemName: "doc.text").font(.system(size: 13)).foregroundStyle(Theme.sec) }
-                .frame(width: 28, height: 28)
+            ZStack { RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.raised); Image(systemName: "doc.text").font(.system(size: 14)).foregroundStyle(Theme.sec) }
+                .frame(width: 32, height: 32)
         }
     }
 

@@ -5,7 +5,7 @@ import UIKit
 // 35-designregler-detaljeret.md). Grey surfaces with chroma 0, a near-black (light) or near-white
 // (dark) accent, DM Sans everywhere and DM Mono for numbers. Colour only when it means something:
 // green = done or running, amber = needs you, red = wrong or overdue, and only as text, chip or dot.
-// The tile colour (Marco's choice for this app, 15 Nov 2026: flat orange #FF8A00 with the white K)
+// The tile colour (Marco's choice for this app, 15 Nov 2026: flat Vipps orange #FE5C25 with the white K)
 // belongs to the K tile only. The UI accent stays the grey-scale pill, which holds contrast in both
 // themes; white text on orange would not.
 
@@ -40,7 +40,7 @@ enum Theme {
     static let bad = Color.dyn(0xc9302c, 0xf08a7e)
     static let badSolid = Color(hex: 0xc62f2a)
     // The app's tile colour, for the K tile only
-    static let tile = Color(hex: 0xFF8A00)
+    static let tile = Color(hex: 0xFE5C25)
 
     // Spacing scale 8 / 12 / 16 / 24
     static let s1: CGFloat = 8, s2: CGFloat = 12, s3: CGFloat = 16, s4: CGFloat = 24
