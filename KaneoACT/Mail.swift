@@ -178,68 +178,10 @@ struct MailDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.s3) {
-                HStack(alignment: .top, spacing: Theme.s2) {
-                    Initials(name: sender, size: 44)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(sender).font(Theme.cardTitle).foregroundStyle(Theme.ink)
-                        Text(mail["fra"].text + (mail["modtaget"].date.map { " · " + ACTDate.dayText($0) + " " + ACTDate.time($0) } ?? ""))
-                            .font(Theme.meta).foregroundStyle(Theme.dim)
-                    }
-                    Spacer()
-                    if mail["status"].text == "venter" { CountdownPill(deadline: mail["frist"].date, skew: m.skew) }
-                }
-                Text(clean(mail["emne"].text)).font(Theme.title).foregroundStyle(Theme.ink)
-                HStack(spacing: 6) {
-                    if let k = mail["kategori"].string { Chip(text: k) }
-                    if mail["foelsom"].bool { Chip(text: "Følsom", tone: .warn) }
-                    if !waiting { Chip(text: mail["status_tekst"].text, tone: .ok) }
-                }
-                if mail["foelsom"].bool, let g = mail["foelsom_grund"].string, !g.isEmpty { Banner(title: "Følsom.", text: clean(g), tone: .warn) }
-                let auto = mail["autosvar"]
-                if auto["ok"].bool && !mail["auto_stop"].bool, let t = auto["tid"].date {
-                    Banner(title: "Autosvar kl. \(ACTDate.time(t)).", text: "Det sendes, medmindre du handler før.", tone: .warn)
-                }
-                let tjek = mail["tjek"].array
-                if !tjek.isEmpty {
-                    Banner(title: "Koden fandt.", text: tjek.map { clean($0.string ?? $0["tekst"].string ?? $0["grund"].text) }.joined(separator: " · "), tone: .bad)
-                }
-                if mail["mangler_viden"].bool, let x = mail["mangler"].string, !x.isEmpty {
-                    Banner(title: "Mangler viden.", text: clean(x), tone: .warn)
-                }
-
-                // The draft on its own sheet of paper
-                VStack(alignment: .leading, spacing: Theme.s2) {
-                    HStack {
-                        Text(waiting ? "Svarudkast" : (mail["sendt_tekst"].isNull ? "Udkast" : "Sendt svar")).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec)
-                        Spacer()
-                        Text("Til " + (mail["svar_til"].string ?? mail["fra"].text)).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
-                    }
-                    Rectangle().fill(Theme.line).frame(height: 1)
-                    Text(clean(mail["sendt_tekst"].string ?? mail["udkast"].text)).font(Theme.sans(15)).foregroundStyle(Theme.ink)
-                        .lineSpacing(5).textSelection(.enabled)
-                }
-                .padding(Theme.s4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line))
-                .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
-
-                Button { withAnimation(.easeOut(duration: 0.2)) { showMail.toggle() } } label: {
-                    HStack {
-                        Text(showMail ? "Skjul mailen" : "Vis mailen").font(Theme.sans(14, .medium)).foregroundStyle(Theme.sec)
-                        Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Theme.dim).rotationEffect(.degrees(showMail ? 180 : 0))
-                    }
-                }
-                .buttonStyle(.plain)
-                if showMail {
-                    VStack(alignment: .leading, spacing: Theme.s1) {
-                        Text(clean(mail["tekst"].text)).font(Theme.small).foregroundStyle(Theme.sec).lineSpacing(3).textSelection(.enabled)
-                        if !mail["vedhaeftet"].array.isEmpty {
-                            Label(mail["vedhaeftet"].array.map { $0.text }.joined(separator: ", "), systemImage: "paperclip").font(Theme.meta).foregroundStyle(Theme.dim)
-                        }
-                    }
-                    .card()
-                }
+                header
+                notices
+                paper
+                original
             }
             .padding(Theme.s3)
         }
@@ -270,6 +212,93 @@ struct MailDetail: View {
             EditDraftSheet(to: mail["svar_til"].string ?? mail["fra"].text, subject: clean(mail["emne"].text), text: $draft) {
                 await send(draft)
             }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.s3) {
+            HStack(alignment: .top, spacing: Theme.s2) {
+                Initials(name: sender, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sender).font(Theme.cardTitle).foregroundStyle(Theme.ink)
+                    Text(fromLine).font(Theme.meta).foregroundStyle(Theme.dim)
+                }
+                Spacer()
+                if mail["status"].text == "venter" { CountdownPill(deadline: mail["frist"].date, skew: m.skew) }
+            }
+            Text(clean(mail["emne"].text)).font(Theme.title).foregroundStyle(Theme.ink)
+            HStack(spacing: 6) {
+                if let k = mail["kategori"].string { Chip(text: k) }
+                if mail["foelsom"].bool { Chip(text: "Følsom", tone: .warn) }
+                if !waiting { Chip(text: mail["status_tekst"].text, tone: .ok) }
+            }
+        }
+    }
+
+    private var fromLine: String {
+        var s = mail["fra"].text
+        if let d = mail["modtaget"].date { s += " · " + ACTDate.dayText(d) + " " + ACTDate.time(d) }
+        return s
+    }
+
+    @ViewBuilder private var notices: some View {
+        if mail["foelsom"].bool, let g = mail["foelsom_grund"].string, !g.isEmpty { Banner(title: "Følsom.", text: clean(g), tone: .warn) }
+        if let t = autoTime { Banner(title: "Autosvar kl. \(ACTDate.time(t)).", text: "Det sendes, medmindre du handler før.", tone: .warn) }
+        if !checks.isEmpty { Banner(title: "Koden fandt.", text: checks, tone: .bad) }
+        if mail["mangler_viden"].bool, let x = mail["mangler"].string, !x.isEmpty { Banner(title: "Mangler viden.", text: clean(x), tone: .warn) }
+    }
+
+    private var autoTime: Date? {
+        let auto = mail["autosvar"]
+        guard auto["ok"].bool, !mail["auto_stop"].bool else { return nil }
+        return auto["tid"].date
+    }
+
+    private var checks: String {
+        mail["tjek"].array.map { t -> String in clean(t.string ?? t["tekst"].string ?? t["grund"].text) }.joined(separator: " · ")
+    }
+
+    private var draftLabel: String {
+        if waiting { return "Svarudkast" }
+        return mail["sendt_tekst"].isNull ? "Udkast" : "Sendt svar"
+    }
+    private var draftText: String { clean(mail["sendt_tekst"].string ?? mail["udkast"].text) }
+    private var recipient: String { mail["svar_til"].string ?? mail["fra"].text }
+
+    /// The draft on its own sheet of paper.
+    private var paper: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            HStack {
+                Text(draftLabel).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec)
+                Spacer()
+                Text("Til " + recipient).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
+            }
+            Rectangle().fill(Theme.line).frame(height: 1)
+            Text(draftText).font(Theme.sans(15)).foregroundStyle(Theme.ink).lineSpacing(5).textSelection(.enabled)
+        }
+        .padding(Theme.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line))
+        .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
+    }
+
+    @ViewBuilder private var original: some View {
+        Button { withAnimation(.easeOut(duration: 0.2)) { showMail.toggle() } } label: {
+            HStack {
+                Text(showMail ? "Skjul mailen" : "Vis mailen").font(Theme.sans(14, .medium)).foregroundStyle(Theme.sec)
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Theme.dim).rotationEffect(.degrees(showMail ? 180 : 0))
+            }
+        }
+        .buttonStyle(.plain)
+        if showMail {
+            VStack(alignment: .leading, spacing: Theme.s1) {
+                Text(clean(mail["tekst"].text)).font(Theme.small).foregroundStyle(Theme.sec).lineSpacing(3).textSelection(.enabled)
+                if !mail["vedhaeftet"].array.isEmpty {
+                    Label(mail["vedhaeftet"].array.map { $0.text }.joined(separator: ", "), systemImage: "paperclip").font(Theme.meta).foregroundStyle(Theme.dim)
+                }
+            }
+            .card()
         }
     }
 
