@@ -11,6 +11,9 @@ name: Build The Firm
 #   sizer_device      Max Sizer, development signed, downloadable .ipa
 #   tradster_testflight  Tradster, App Store signed, uploaded to TestFlight
 #   tradster_device      Tradster, development signed, downloadable .ipa
+#   kaneoact_register    Kaneo ACT, register the bundle id (with push) only
+#   kaneoact_testflight  Kaneo ACT, App Store signed, uploaded to TestFlight
+#   kaneoact_device      Kaneo ACT, development signed, downloadable .ipa
 
 on:
   workflow_dispatch:
@@ -19,7 +22,7 @@ on:
         description: What to build
         type: choice
         default: testflight
-        options: [testflight, device, sizer_device, sizer_testflight, tradster_device, tradster_testflight]
+        options: [testflight, device, sizer_device, sizer_testflight, tradster_device, tradster_testflight, kaneoact_register, kaneoact_device, kaneoact_testflight]
 
 permissions:
   contents: write
@@ -87,6 +90,7 @@ jobs:
           case "${{ inputs.lane }}" in
             sizer_device) TAG=sizer-${GITHUB_RUN_NUMBER}; TITLE="Max Sizer build ${GITHUB_RUN_NUMBER}" ;;
             tradster_device) TAG=tradster-${GITHUB_RUN_NUMBER}; TITLE="Tradster build ${GITHUB_RUN_NUMBER}" ;;
+            kaneoact_device) TAG=kaneoact-${GITHUB_RUN_NUMBER}; TITLE="Kaneo ACT build ${GITHUB_RUN_NUMBER}" ;;
             *)            TAG=firm-${GITHUB_RUN_NUMBER};  TITLE="The Firm build ${GITHUB_RUN_NUMBER}" ;;
           esac
           gh release create "$TAG" out/*.ipa --title "$TITLE" --notes "Development signed. Sideload it." --repo "$GITHUB_REPOSITORY"

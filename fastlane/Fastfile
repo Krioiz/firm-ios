@@ -17,21 +17,14 @@ def prepare(type, ids = nil)
            elsif bid.end_with?("widget") then "The Firm Widget"
            elsif bid.end_with?("sizer") then "Max Sizer"
            elsif bid.end_with?("tradster") then "Tradster"
+           elsif bid.end_with?("kaneoact") then "Kaneo ACT"
            else "The Firm" end
     Spaceship::ConnectAPI::BundleId.create(name: nice, identifier: bid, platform: "IOS")
     UI.message("created bundle id #{bid}")
   end
   # Tradster pushes from itself, so its bundle id needs the push capability before match makes
   # the profile. Idempotent: an existing capability raises, and that is fine.
-  if ids.include?("com.getstubbie.tradster")
-    begin
-      b = Spaceship::ConnectAPI::BundleId.all.find { |x| x.identifier == "com.getstubbie.tradster" }
-      b.create_capability(Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS) if b
-      UI.message("push capability on com.getstubbie.tradster")
-    rescue => e
-      UI.message("push capability: #{e.message[0, 140]}")
-    end
-  end
+  (ids & ["com.getstubbie.tradster", "com.getstubbie.kaneoact"]).each { |bid| push_capability(bid) }
   match(type: type, app_identifier: ids, api_key: api, readonly: false,
         # 14 Oct 2026: the certificates moved to their own PRIVATE repo so this one can be public
         # (public = free macOS runners). The job's own GITHUB_TOKEN cannot see another repo, so
@@ -55,6 +48,16 @@ def prepare(type, ids = nil)
   end
   sh "cd .. && xcodegen generate"
   api
+end
+
+# Tradster and Kaneo ACT get push from the server, so their bundle ids need the capability before
+# match makes the profile. Idempotent: an existing capability raises, and that is fine.
+def push_capability(bid)
+  b = Spaceship::ConnectAPI::BundleId.all.find { |x| x.identifier == bid }
+  b.create_capability(Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS) if b
+  UI.message("push capability on #{bid}")
+rescue => e
+  UI.message("push capability on #{bid}: #{e.message[0, 140]}")
 end
 
 # A scheme that is not shared is not an error to fastlane — it picks whichever scheme it can find
@@ -197,6 +200,56 @@ platform :ios do
       UI.important("could not create the app record: #{e.message}")
     end
     upload_to_testflight(api_key: api, app_identifier: "com.getstubbie.tradster",
+                         skip_waiting_for_build_processing: true, skip_submission: true)
+  end
+
+  # ---- Kaneo ACT -------------------------------------------------------------------------
+  # Marco's internal system (act.kaneo.ai) as a native app. Own bundle id, push capability.
+  KANEOACT_IDS = ["com.getstubbie.kaneoact"]
+
+  desc "Kaneo ACT — register the bundle id (with push) only, so App Store Connect can offer it"
+  lane :kaneoact_register do
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key: ENV["ASC_KEY_P8"])
+    KANEOACT_IDS.each do |bid|
+      found = Spaceship::ConnectAPI::BundleId.all(filter: { identifier: bid }).find { |x| x.identifier == bid }
+      if found
+        UI.message("bundle id #{bid} already registered (#{found.name})")
+      else
+        Spaceship::ConnectAPI::BundleId.create(name: "Kaneo ACT", identifier: bid, platform: "IOS")
+        UI.success("created bundle id #{bid}")
+      end
+      push_capability(bid)
+    end
+  end
+
+  desc "Kaneo ACT — development build, installable on registered devices"
+  lane :kaneoact_device do
+    prepare("development", KANEOACT_IDS)
+    require_scheme("KaneoACT")
+    build_app(project: "Firm.xcodeproj", scheme: "KaneoACT", configuration: "Release",
+              export_method: "development", output_directory: "out", output_name: "KaneoACT.ipa",
+              export_options: { method: "development",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Development' CODE_SIGN_STYLE=Manual")
+  end
+
+  desc "Kaneo ACT — App Store signed, uploaded to TestFlight (needs the App Store Connect record first)"
+  lane :kaneoact_testflight do
+    api = prepare("appstore", KANEOACT_IDS)
+    require_scheme("KaneoACT")
+    build_app(project: "Firm.xcodeproj", scheme: "KaneoACT", configuration: "Release",
+              export_method: "app-store", output_directory: "out", output_name: "KaneoACT.ipa",
+              export_options: { method: "app-store",
+                                provisioningProfiles: lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] },
+              xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_IDENTITY='Apple Distribution' CODE_SIGN_STYLE=Manual")
+    # The ASC API key cannot create app records, so this fails until Marco has made the record
+    # for com.getstubbie.kaneoact in App Store Connect by hand.
+    unless Spaceship::ConnectAPI::App.find("com.getstubbie.kaneoact")
+      UI.user_error!("No App Store Connect record for com.getstubbie.kaneoact yet. Create it in App Store Connect " \
+                     "(My Apps > + > New App, bundle id com.getstubbie.kaneoact), then run this lane again.")
+    end
+    upload_to_testflight(api_key: api, app_identifier: "com.getstubbie.kaneoact",
                          skip_waiting_for_build_processing: true, skip_submission: true)
   end
 end
