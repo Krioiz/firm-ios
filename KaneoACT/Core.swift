@@ -286,7 +286,8 @@ final class WebLogin: NSObject, ASWebAuthenticationPresentationContextProviding 
 }
 
 // MARK: - Theme
-// ACT's own palette (index.html :root, dark is the default) with Kaneo's green K as the accent.
+// ACT's own palette (index.html :root, dark is the default) with Kaneo's violet K as the accent
+// (the brand since 10 Nov 2026, as in the Kaneo app and on kaneo.ai).
 extension Color {
     init(hex: UInt32) { self.init(red: Double((hex >> 16) & 0xff) / 255, green: Double((hex >> 8) & 0xff) / 255, blue: Double(hex & 0xff) / 255) }
     static func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
@@ -298,8 +299,8 @@ extension Color {
 }
 
 enum Theme {
-    static let brand = Color(hex: 0x037760)                    // the K logo's green
-    static let accent = Color.dyn(0x037760, 0x2fb592)
+    static let brand = Color(hex: 0x6B4EFF)                    // the violet K (kaneo.ai/icon-512.png)
+    static let accent = Color.dyn(0x6B4EFF, 0x8F7BFF)          // lighter in dark mode for contrast
     static let bg = Color.dyn(0xf2f3f4, 0x0e0f10)
     static let card = Color.dyn(0xffffff, 0x1d1f20)
     static let line = Color.dyn(0xe6e8e9, 0x2e3133)
