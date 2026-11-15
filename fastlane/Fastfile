@@ -263,4 +263,76 @@ platform :ios do
       UI.message("build #{b.app_version} (#{b.version}) uploaded #{b.uploaded_date} state #{b.processing_state} expired #{b.expired}")
     end
   end
+
+  # TestFlight visibility for Kaneo ACT: export compliance on recent builds, an internal group
+  # "Intern" with automatic distribution, the same testers as The Firm/Tradster's internal groups,
+  # and the latest build in the group. Idempotent. The repo is public, so e-mails are masked.
+  desc "Kaneo ACT — set up internal TestFlight testing (compliance, group Intern, testers, build)"
+  lane :kaneoact_beta do
+    mask = ->(e) { e.to_s.sub(/^(.).*?@/, '\\1***@') }
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key: ENV["ASC_KEY_P8"])
+    app = Spaceship::ConnectAPI::App.find("com.getstubbie.kaneoact")
+    UI.user_error!("no App Store Connect record for com.getstubbie.kaneoact") unless app
+    builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, sort: "-uploadedDate", limit: 5, includes: "buildBetaDetail")
+    builds.each do |b|
+      UI.message("build #{b.version}: usesNonExemptEncryption=#{b.uses_non_exempt_encryption.inspect} state=#{b.processing_state}")
+      next unless b.uses_non_exempt_encryption.nil?
+      begin
+        Spaceship::ConnectAPI.patch_builds(build_id: b.id, attributes: { usesNonExemptEncryption: false })
+        UI.success("build #{b.version}: export compliance set (usesNonExemptEncryption=false)")
+      rescue => e
+        UI.important("build #{b.version}: compliance: #{e.message[0, 200]}")
+      end
+    end
+
+    group = app.get_beta_groups.find { |g| g.name == "Intern" }
+    if group
+      UI.message("group Intern exists (internal=#{group.is_internal_group}, all builds=#{group.has_access_to_all_builds.inspect})")
+    else
+      group = app.create_beta_group(group_name: "Intern", is_internal_group: true, has_access_to_all_builds: true)
+      UI.success("created internal group Intern with automatic distribution")
+    end
+
+    # The internal testers The Firm and Tradster already have.
+    emails = []
+    ["com.getstubbie.firm", "com.getstubbie.tradster"].each do |bid|
+      other = Spaceship::ConnectAPI::App.find(bid)
+      next unless other
+      other.get_beta_groups.select(&:is_internal_group).each do |g|
+        Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: g.id }).each { |t| emails << t.email if t.email }
+      end
+    end
+    emails.uniq!
+    UI.message("internal testers on Firm/Tradster: #{emails.map(&mask).join(', ')}")
+    have = Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: group.id }).map { |t| t.email.to_s.downcase }
+    emails.each do |em|
+      if have.include?(em.downcase)
+        UI.message("#{mask.(em)} already in Intern")
+        next
+      end
+      begin
+        Spaceship::ConnectAPI.post_beta_tester_assignment(beta_group_ids: [group.id], attributes: { email: em })
+        UI.success("added #{mask.(em)} to Intern")
+      rescue => e
+        UI.important("add #{mask.(em)}: #{e.message[0, 200]}")
+      end
+    end
+
+    latest = builds.first
+    if latest
+      begin
+        Spaceship::ConnectAPI.add_beta_groups_to_build(build_id: latest.id, beta_group_ids: [group.id])
+        UI.success("build #{latest.version} added to Intern")
+      rescue => e
+        UI.message("add build to Intern: #{e.message[0, 200]}")
+      end
+    end
+
+    Spaceship::ConnectAPI::Build.all(app_id: app.id, sort: "-uploadedDate", limit: 3, includes: "buildBetaDetail").each do |b|
+      d = b.build_beta_detail
+      UI.message("STATUS build #{b.version}: internal=#{d && d.internal_build_state} compliance=#{b.uses_non_exempt_encryption.inspect}")
+    end
+    UI.message("Intern testers now: #{Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: group.id }).map { |t| mask.(t.email) }.join(', ')}")
+  end
 end

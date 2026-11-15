@@ -15,6 +15,7 @@ name: Build The Firm
 #   kaneoact_testflight  Kaneo ACT, App Store signed, uploaded to TestFlight
 #   kaneoact_device      Kaneo ACT, development signed, downloadable .ipa
 #   kaneoact_status      Kaneo ACT, read-only: TestFlight builds and processing state
+#   kaneoact_beta        Kaneo ACT, internal TestFlight: compliance, group Intern, testers, build
 
 on:
   workflow_dispatch:
@@ -23,7 +24,7 @@ on:
         description: What to build
         type: choice
         default: testflight
-        options: [testflight, device, sizer_device, sizer_testflight, tradster_device, tradster_testflight, kaneoact_register, kaneoact_device, kaneoact_testflight, kaneoact_status]
+        options: [testflight, device, sizer_device, sizer_testflight, tradster_device, tradster_testflight, kaneoact_register, kaneoact_device, kaneoact_testflight, kaneoact_status, kaneoact_beta]
 
 permissions:
   contents: write
