@@ -285,66 +285,6 @@ final class WebLogin: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
 }
 
-// MARK: - Theme
-// ACT's own palette (index.html :root, dark is the default) with Kaneo's violet K as the accent
-// (the brand since 10 Nov 2026, as in the Kaneo app and on kaneo.ai).
-extension Color {
-    init(hex: UInt32) { self.init(red: Double((hex >> 16) & 0xff) / 255, green: Double((hex >> 8) & 0xff) / 255, blue: Double(hex & 0xff) / 255) }
-    static func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(UIColor { t in
-            let h = t.userInterfaceStyle == .dark ? dark : light
-            return UIColor(red: CGFloat((h >> 16) & 0xff) / 255, green: CGFloat((h >> 8) & 0xff) / 255, blue: CGFloat(h & 0xff) / 255, alpha: 1)
-        })
-    }
-}
-
-enum Theme {
-    static let brand = Color(hex: 0x6B4EFF)                    // the violet K (kaneo.ai/icon-512.png)
-    static let accent = Color.dyn(0x6B4EFF, 0x8F7BFF)          // lighter in dark mode for contrast
-    static let bg = Color.dyn(0xf2f3f4, 0x0e0f10)
-    static let card = Color.dyn(0xffffff, 0x1d1f20)
-    static let line = Color.dyn(0xe6e8e9, 0x2e3133)
-    static let ink = Color.dyn(0x1c2024, 0xe4e5e5)
-    static let sec = Color.dyn(0x5b6166, 0xa5a6a7)
-    static let dim = Color.dyn(0x80868b, 0x74787a)
-    static let ok = Color.dyn(0x2f8f46, 0x46a758)
-    static let warn = Color.dyn(0xc2780a, 0xf59e0b)
-    static let bad = Color.dyn(0xd03238, 0xe5484d)
-
-    /// Tommy Soft (Kaneo's typeface) is a commercial font with no app-embedding licence on file,
-    /// so the app uses the system's rounded face, which is the closest match.
-    static func font(_ style: Font.TextStyle, _ weight: Font.Weight = .regular) -> Font {
-        .system(style, design: .rounded).weight(weight)
-    }
-}
-
-struct CardBG: ViewModifier {
-    func body(content: Content) -> some View {
-        content.padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 0.5))
-    }
-}
-extension View { func card() -> some View { modifier(CardBG()) } }
-
-struct Pill: View {
-    let text: String
-    var color: Color = Theme.sec
-    var body: some View {
-        Text(text).font(Theme.font(.caption2, .semibold)).foregroundStyle(color)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(color.opacity(0.14), in: Capsule())
-    }
-}
-
-struct ErrorLine: View {
-    let text: String
-    var body: some View {
-        Label(text, systemImage: "exclamationmark.triangle.fill").font(Theme.font(.footnote)).foregroundStyle(Theme.bad)
-    }
-}
-
 // MARK: - Toast
 @MainActor final class Toast: ObservableObject {
     static let shared = Toast()
@@ -409,29 +349,5 @@ enum Brands {
             if let r = rules.first(where: { hit($0.strong, t) || (weak && hit($0.weak, t)) }) { return r.brand }
         }
         return nil
-    }
-}
-
-struct BrandIcon: View {
-    let item: JSON
-    var size: CGFloat = 28
-    var body: some View {
-        let b = Brands.of(item)
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.26, style: .continuous).fill(Theme.bg)
-            if let b, let a = b.asset {
-                if let tint = b.tint {
-                    Image(a).resizable().renderingMode(.template).scaledToFit().foregroundStyle(tint).padding(size * 0.16)
-                } else {
-                    Image(a).resizable().scaledToFit().padding(size * 0.12)
-                }
-            } else if b?.key == "jura" {
-                Image(systemName: "scalemass").font(.system(size: size * 0.5)).foregroundStyle(Theme.sec)
-            } else {
-                Image(systemName: "tray").font(.system(size: size * 0.5)).foregroundStyle(Theme.sec)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityLabel(b?.name ?? "Beslutning")
     }
 }

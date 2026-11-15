@@ -112,7 +112,9 @@ struct NeoView: View {
     @State private var showFiles = false
     @FocusState private var focused: Bool
 
-    /// "@kan" at the cursor's word: the open decisions to answer, as the web composer offers them.
+    private let suggestions = ["Hvad venter på mig i dag?", "Hvilke frister har jeg denne uge?", "Hvordan går det med agenterne?", "Opsummér de nye mails"]
+
+    /// "@kan" at the end: the open decisions to answer, as the web composer offers them.
     private var atQuery: String? {
         guard let r = text.range(of: "(^|\\s)@([^\\s@]*)$", options: .regularExpression) else { return nil }
         return String(text[r]).trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
@@ -126,24 +128,17 @@ struct NeoView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if m.msgs.isEmpty {
-                            VStack(spacing: 10) {
-                                Image("Logo").resizable().frame(width: 56, height: 56)
-                                Text("Spørg Neo om opgaver, agenter, mails og Kaneos hjerne. Skriv @ for at svare på en beslutning.")
-                                    .font(Theme.font(.footnote)).foregroundStyle(Theme.sec).multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity).padding(.top, 60)
-                        }
+                    LazyVStack(alignment: .leading, spacing: Theme.s3) {
+                        if m.msgs.isEmpty { empty }
                         ForEach(m.msgs) { msg in Bubble(msg: msg).id(msg.id) }
                         Color.clear.frame(height: 1).id("end")
                     }
-                    .padding()
+                    .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: m.msgs) { _, _ in withAnimation { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: m.msgs) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } }
             }
-            .background(Theme.bg)
+            .screen()
             .safeAreaInset(edge: .bottom) { composer }
             .navigationTitle("Neo").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -153,11 +148,11 @@ struct NeoView: View {
                         if !m.threads.isEmpty {
                             Section("Samtaler") {
                                 ForEach(m.threads, id: \.self) { t in
-                                    Button(String(t["titel"].text.prefix(60))) { Task { await m.open(t["traad"].string) } }
+                                    Button(clean(String(t["titel"].text.prefix(60)))) { Task { await m.open(t["traad"].string) } }
                                 }
                             }
                         }
-                    } label: { Image(systemName: "clock.arrow.circlepath") }
+                    } label: { Image(systemName: "clock") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -165,7 +160,7 @@ struct NeoView: View {
                             Text("Hurtig").tag("hurtig"); Text("Normal").tag("normal"); Text("Grundig").tag("grundig")
                             Text("Reserve").tag("reserve"); Text("Lokal").tag("lokal")
                         }
-                    } label: { Label(m.mode.capitalized, systemImage: "dial.medium") }
+                    } label: { Text(m.mode.capitalized).font(Theme.sans(14, .medium)) }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await m.open(nil) } } label: { Image(systemName: "square.and.pencil") }
@@ -198,82 +193,116 @@ struct NeoView: View {
         }
     }
 
+    private var empty: some View {
+        VStack(spacing: Theme.s3) {
+            KTile(size: 56).padding(.top, 56)
+            VStack(spacing: 4) {
+                Text("Hvad skal jeg gøre for dig?").font(Theme.sans(20, .semibold)).foregroundStyle(Theme.ink)
+                Text("Spørg om opgaver, agenter, mails og Kaneos hjerne. Skriv @ for at svare på en beslutning.")
+                    .font(Theme.small).foregroundStyle(Theme.sec).multilineTextAlignment(.center).frame(maxWidth: 300)
+            }
+            VStack(spacing: Theme.s1) {
+                ForEach(suggestions, id: \.self) { s in
+                    Button { Haptic.tap(); Task { await m.send(s) } } label: {
+                        HStack { Text(s).font(Theme.sans(14, .medium)).foregroundStyle(Theme.ink); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Theme.dim) }
+                            .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.line))
+                    }
+                    .buttonStyle(Press())
+                }
+            }
+            .padding(.top, Theme.s2)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var composer: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.s1) {
             if !atList.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Svar på en beslutning").font(Theme.font(.caption, .semibold)).foregroundStyle(Theme.dim).padding(.bottom, 4)
+                    Text("Svar på en beslutning").font(Theme.tag).foregroundStyle(Theme.dim).padding(.horizontal, Theme.s3).padding(.top, Theme.s2).padding(.bottom, 4)
                     ForEach(atList, id: \.self) { c in
                         Button { pick(c) } label: {
-                            HStack(spacing: 8) {
-                                BrandIcon(item: c, size: 22)
-                                Text(kode(c)).font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.dim)
-                                Text(c["navn"].text).font(Theme.font(.footnote)).foregroundStyle(Theme.ink).lineLimit(1)
+                            HStack(spacing: Theme.s1) {
+                                BrandIcon(item: c, size: 24)
+                                Text(kode(c)).font(Theme.code).foregroundStyle(Theme.dim)
+                                Text(clean(c["navn"].text)).font(Theme.small).foregroundStyle(Theme.ink).lineLimit(1)
                                 Spacer()
                             }
-                            .padding(.vertical, 6).contentShape(Rectangle())
+                            .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1).contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(Press())
                     }
                 }
-                .card()
+                .padding(.bottom, Theme.s1)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line))
             }
             if !m.files.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: Theme.s1) {
                         ForEach(m.files) { f in
                             HStack(spacing: 6) {
-                                if let img = f.image { Image(uiImage: img).resizable().scaledToFill().frame(width: 28, height: 28).clipShape(RoundedRectangle(cornerRadius: 6)) }
+                                if let img = f.image { Image(uiImage: img).resizable().scaledToFill().frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 6)) }
                                 else { Image(systemName: "doc").foregroundStyle(Theme.sec) }
-                                Text(f.navn).font(Theme.font(.caption)).lineLimit(1).frame(maxWidth: 120)
+                                Text(f.navn).font(Theme.meta).foregroundStyle(Theme.ink).lineLimit(1).frame(maxWidth: 120)
                                 if f.uploading { ProgressView().controlSize(.mini) }
-                                if f.fejl != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.bad) }
-                                Button { m.files.removeAll { $0.id == f.id } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim) }
+                                if f.fejl != nil { Dot(tone: .bad) }
+                                Button { m.files.removeAll { $0.id == f.id } } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.dim) }
                             }
-                            .padding(6).background(Theme.card, in: Capsule())
+                            .padding(.horizontal, 10).padding(.vertical, 6).background(Theme.raised, in: Capsule())
                         }
                     }
                 }
             }
             if dict.listening {
-                Text(dict.text.isEmpty ? "Lytter…" : dict.text).font(Theme.font(.footnote)).foregroundStyle(Theme.sec).frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: Theme.s1) {
+                    Dot(tone: .bad)
+                    Text(dict.text.isEmpty ? "Lytter" : dict.text).font(Theme.small).foregroundStyle(Theme.sec).lineLimit(2)
+                    Spacer()
+                }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: Theme.s1) {
                 Menu {
                     Button { showPhotos = true } label: { Label("Billede", systemImage: "photo") }
                     Button { showFiles = true } label: { Label("Fil", systemImage: "doc") }
                 } label: {
-                    Image(systemName: "paperclip").font(.system(size: 18, weight: .semibold)).frame(width: 36, height: 36)
+                    Image(systemName: "plus").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.ink)
+                        .frame(width: 40, height: 40).background(Theme.raised, in: Circle())
                 }
-                TextField("Skriv til Neo…", text: $text, axis: .vertical)
-                    .lineLimit(1...6).focused($focused)
-                    .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.line))
-                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && m.files.isEmpty {
-                    Button { Task { await toggleDictation() } } label: {
-                        Image(systemName: dict.listening ? "stop.circle.fill" : "mic.fill").font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(dict.listening ? Theme.bad : Theme.accent).frame(width: 36, height: 36)
+                HStack(alignment: .bottom, spacing: 4) {
+                    TextField("Skriv til Neo", text: $text, axis: .vertical)
+                        .font(Theme.body).lineLimit(1...6).focused($focused)
+                        .padding(.leading, Theme.s3).padding(.vertical, 10)
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && m.files.isEmpty {
+                        Button { Task { await toggleDictation() } } label: {
+                            Image(systemName: dict.listening ? "stop.fill" : "mic").font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(dict.listening ? Theme.bad : Theme.sec).frame(width: 36, height: 40)
+                        }
+                    } else {
+                        Button {
+                            let t = text; text = ""; Haptic.tap()
+                            Task { await m.send(t) }
+                        } label: {
+                            Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.onAccent)
+                                .frame(width: 32, height: 32).background(m.busy ? Theme.dim : Theme.accent, in: Circle())
+                        }
+                        .disabled(m.busy).padding(4)
                     }
-                } else {
-                    Button {
-                        let t = text; text = ""
-                        Task { await m.send(t) }
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(m.busy ? Theme.dim : Theme.accent)
-                    }
-                    .disabled(m.busy)
                 }
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(focused ? Theme.lineStrong : Theme.line))
             }
-            if dict.denied { Text("Giv adgang til mikrofon og talegenkendelse i Indstillinger.").font(Theme.font(.caption2)).foregroundStyle(Theme.bad) }
+            if dict.denied { Text("Giv adgang til mikrofon og talegenkendelse i Indstillinger.").font(Theme.meta).foregroundStyle(Theme.bad) }
         }
-        .padding(.horizontal).padding(.vertical, 8)
+        .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1)
         .background(.bar)
     }
 
     private func pick(_ c: JSON) {
         if let r = text.range(of: "@[^\\s@]*$", options: .regularExpression) { text.replaceSubrange(r, with: "@\(kode(c)) ") }
-        focused = true
+        Haptic.tap(); focused = true
     }
 
     private func toggleDictation() async {
@@ -290,28 +319,50 @@ struct Bubble: View {
     let msg: ChatMsg
     var body: some View {
         let mine = msg.rolle == "user"
-        HStack {
-            if mine { Spacer(minLength: 40) }
-            VStack(alignment: mine ? .trailing : .leading, spacing: 6) {
-                if !msg.filer.isEmpty {
+        if mine {
+            HStack {
+                Spacer(minLength: 48)
+                VStack(alignment: .trailing, spacing: 6) {
                     ForEach(Array(msg.filer.enumerated()), id: \.offset) { _, f in
-                        Label(f["navn"].text, systemImage: f["billede"].bool ? "photo" : "doc").font(Theme.font(.caption)).foregroundStyle(mine ? Color.white.opacity(0.85) : Theme.sec)
+                        Label(f["navn"].text, systemImage: f["billede"].bool ? "photo" : "doc").font(Theme.meta).foregroundStyle(Theme.onAccent.opacity(0.8))
+                    }
+                    Text(msg.tekst).font(Theme.body).foregroundStyle(Theme.onAccent).textSelection(.enabled)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+        } else {
+            HStack(alignment: .top, spacing: Theme.s1) {
+                if msg.live && (msg.tekst.isEmpty || !msg.arb.isEmpty) { Orb(size: 20) } else { KTile(size: 24).padding(.top, 2) }
+                VStack(alignment: .leading, spacing: Theme.s1) {
+                    ForEach(Array(msg.vis.enumerated()), id: \.offset) { _, v in ActionChip(v: v) }
+                    if !msg.tekst.isEmpty {
+                        Text(markdown(clean(msg.tekst))).font(Theme.body).foregroundStyle(Theme.ink).lineSpacing(4).textSelection(.enabled)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.line))
+                    }
+                    if msg.live && (msg.tekst.isEmpty || !msg.arb.isEmpty) {
+                        Text(msg.arb.isEmpty ? "Neo tænker" : msg.arb).font(Theme.small).foregroundStyle(Theme.sec).padding(.top, 2)
+                    }
+                    if !msg.kilder.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(msg.kilder.enumerated()), id: \.offset) { _, k in
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "doc.text").font(.system(size: 10))
+                                        Text(clean(k["titel"].string ?? k["overskrift"].string ?? k["fil"].text)).font(Theme.tag).lineLimit(1)
+                                    }
+                                    .foregroundStyle(Theme.sec)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Theme.raised, in: Capsule())
+                                }
+                            }
+                        }
                     }
                 }
-                ForEach(Array(msg.vis.enumerated()), id: \.offset) { _, v in ActionChip(v: v) }
-                if !msg.tekst.isEmpty {
-                    Text(markdown(msg.tekst)).font(Theme.font(.body)).foregroundStyle(mine ? Color.white : Theme.ink).textSelection(.enabled)
-                }
-                if !msg.arb.isEmpty || (msg.live && msg.tekst.isEmpty) {
-                    HStack(spacing: 6) { ProgressView().controlSize(.small); Text(msg.arb.isEmpty ? "Neo tænker…" : msg.arb).font(Theme.font(.caption)).foregroundStyle(Theme.sec) }
-                }
-                if !msg.kilder.isEmpty {
-                    Text("Kilder: " + msg.kilder.map { $0["titel"].string ?? $0["fil"].text }.joined(separator: " · ")).font(Theme.font(.caption2)).foregroundStyle(Theme.dim)
-                }
+                Spacer(minLength: 24)
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(mine ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.card), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            if !mine { Spacer(minLength: 20) }
         }
     }
 }
@@ -321,16 +372,16 @@ struct ActionChip: View {
     let v: JSON
     var body: some View {
         let type = v["type"].text
-        let title = [kode(v), v["navn"].text].filter { !$0.isEmpty }.joined(separator: " ")
-        HStack(spacing: 6) {
-            Image(systemName: type == "fejl" ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(type == "fejl" ? Theme.bad : Theme.ok)
+        let title = [kode(v), clean(v["navn"].text)].filter { !$0.isEmpty }.joined(separator: " ")
+        HStack(spacing: Theme.s1) {
+            Dot(tone: type == "fejl" ? .bad : .ok)
             VStack(alignment: .leading, spacing: 1) {
-                Text(type.capitalized).font(Theme.font(.caption2, .semibold)).foregroundStyle(Theme.dim)
-                Text(title.isEmpty ? v["tekst"].text : title).font(Theme.font(.caption)).foregroundStyle(Theme.ink).lineLimit(2)
+                Text(type.capitalizedFirst).font(Theme.tag).foregroundStyle(Theme.dim)
+                Text(title.isEmpty ? clean(v["tekst"].text) : title).font(Theme.small).foregroundStyle(Theme.ink).lineLimit(2)
             }
         }
-        .padding(8).background(Theme.bg, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, Theme.s2).padding(.vertical, Theme.s1)
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

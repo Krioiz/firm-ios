@@ -187,6 +187,8 @@ targets:
         NSFaceIDUsageDescription: Lås Kaneo ACT op med Face ID.
         NSMicrophoneUsageDescription: Diktér beskeder til Neo.
         NSSpeechRecognitionUsageDescription: Det du siger bliver til tekst på telefonen, som sendes til Neo.
+        # DM Sans and DM Mono, SIL Open Font License 1.1 (licence files next to the fonts).
+        UIAppFonts: [DMSans-Regular.otf, DMSans-Medium.otf, DMSans-SemiBold.otf, DMMono-Regular.ttf, DMMono-Medium.ttf]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.kaneoact

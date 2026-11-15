@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 // Svarvagt: the same list as ACT's Mail page (GET /api/svarvagt), a countdown to the 10-minute
-// deadline, the draft, and Send / Ret og send / Afvis. Sending always needs a confirm, as on the web.
+// deadline as a small pill, the draft on a clean sheet, and Send / Ret og send / Afvis. Sending
+// always asks first, as on the web.
 @MainActor final class MailModel: ObservableObject {
     @Published var data: JSON = .null
     @Published var error: String?
@@ -23,25 +24,33 @@ import UIKit
         loaded = true
     }
 
-    func act(_ path: String, _ body: [String: Any], ok: String) async -> Bool {
+    func act(_ path: String, _ body: [String: Any], ok: String, reject: Bool = false) async -> Bool {
         do {
             try await API.shared.send(path, body)
-            Toast.shared.show(ok); UINotificationFeedbackGenerator().notificationOccurred(.success)
+            if reject { Haptic.reject() } else { Haptic.approve() }
+            Toast.shared.show(ok)
             await load(); Router.shared.changed(); return true
-        } catch { Toast.shared.show(error.localizedDescription); return false }
+        } catch { Haptic.fail(); Toast.shared.show(error.localizedDescription); return false }
     }
 }
 
-struct Countdown: View {
+/// "7:42" left, amber under 3 minutes, red and "+0:30" once the deadline has passed.
+struct CountdownPill: View {
     let deadline: Date?
     let skew: TimeInterval
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             if let d = deadline {
                 let left = Int(d.timeIntervalSince(ctx.date.addingTimeInterval(skew)))
-                let txt = left >= 0 ? String(format: "%d:%02d", left / 60, left % 60) : "+" + String(format: "%d:%02d", -left / 60, -left % 60)
-                Text(txt).font(.system(.subheadline, design: .rounded).weight(.bold).monospacedDigit())
-                    .foregroundStyle(left < 0 ? Theme.bad : left < 180 ? Theme.warn : Theme.ok)
+                let a = abs(left)
+                let txt = (left < 0 ? "+" : "") + String(format: "%d:%02d", a / 60, a % 60)
+                HStack(spacing: 4) {
+                    Image(systemName: "timer").font(.system(size: 10, weight: .semibold))
+                    Text(txt).font(Theme.mono(12, .medium)).monospacedDigit()
+                }
+                .foregroundStyle(left < 0 ? Theme.bad : left < 180 ? Theme.warn : Theme.sec)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background((left < 0 ? Theme.bad : left < 180 ? Theme.warn : Theme.sec).opacity(0.12), in: Capsule())
             }
         }
     }
@@ -55,39 +64,59 @@ struct MailView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let e = m.error { ErrorLine(text: e) }
+                if let e = m.error { ErrorLine(text: e).plainRow() }
                 if m.data["indstillinger"]["stop"].bool || m.data["pause"].bool {
-                    Label(m.data["pause"].bool ? "Alle agenter er på pause" : "Svarvagt er stoppet", systemImage: "pause.circle.fill").foregroundStyle(Theme.warn)
+                    Banner(title: m.data["pause"].bool ? "Alle agenter er på pause." : "Svarvagt er stoppet.",
+                           text: "Ingen nye svarudkast eller autosvar, før den kører igen.", tone: .warn).plainRow()
                 }
-                Section("Venter (\(m.open.count))") {
-                    if m.open.isEmpty && m.loaded { Text("Ingen mails venter på svar.").font(Theme.font(.footnote)).foregroundStyle(Theme.dim) }
-                    ForEach(m.open, id: \.self) { mail in
-                        NavigationLink { MailDetail(mail: mail, m: m) } label: { MailRow(mail: mail, skew: m.skew, countdown: true) }
-                    }
+                if !m.loaded {
+                    SkeletonRows(count: 3).plainRow()
+                } else if m.open.isEmpty {
+                    EmptyState(icon: "tray", title: "Alt er besvaret",
+                               text: "Når en ny mail til marco@ eller kontakt@ kommer, står den her med et svarudkast.").plainRow()
+                } else {
+                    Section { ForEach(m.open, id: \.self) { mail in row(mail, countdown: true) } } header: { head("Venter på svar", m.open.count) }
                 }
                 if !m.dry.isEmpty {
-                    Section("Tørløb (\(m.dry.count))") {
-                        ForEach(m.dry, id: \.self) { mail in
-                            NavigationLink { MailDetail(mail: mail, m: m) } label: { MailRow(mail: mail, skew: m.skew, countdown: false) }
-                        }
-                    }
+                    Section { ForEach(m.dry, id: \.self) { mail in row(mail, countdown: false) } } header: { head("Tørløb", m.dry.count) }
                 }
-                Section {
-                    DisclosureGroup("Afgjort (\(m.done.count))", isExpanded: $showDone) {
-                        ForEach(m.done, id: \.self) { mail in
-                            NavigationLink { MailDetail(mail: mail, m: m) } label: { MailRow(mail: mail, skew: m.skew, countdown: false) }
+                if !m.done.isEmpty {
+                    Section {
+                        if showDone { ForEach(m.done, id: \.self) { mail in row(mail, countdown: false) } }
+                    } header: {
+                        Button { withAnimation(.easeOut(duration: 0.2)) { showDone.toggle() } } label: {
+                            HStack {
+                                Text("Afgjort").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec).textCase(nil)
+                                Text("\(m.done.count)").font(Theme.mono(12)).foregroundStyle(Theme.dim)
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.dim).rotationEffect(.degrees(showDone ? 90 : 0))
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Theme.bg)
+            .listStyle(.plain)
+            .screen()
             .refreshable { await m.load() }
             .navigationTitle("Mail")
             .task { await m.load() }
             .onChange(of: router.stamp) { _, _ in Task { await m.load() } }
-            .overlay { if !m.loaded { ProgressView() } }
         }
+    }
+
+    private func head(_ t: String, _ n: Int) -> some View {
+        HStack {
+            Text(t).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec).textCase(nil)
+            Spacer()
+            Text("\(n)").font(Theme.mono(12)).foregroundStyle(Theme.dim)
+        }
+    }
+
+    private func row(_ mail: JSON, countdown: Bool) -> some View {
+        NavigationLink { MailDetail(mail: mail, m: m) } label: { MailRow(mail: mail, skew: m.skew, countdown: countdown) }
+            .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
+            .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
     }
 }
 
@@ -96,25 +125,38 @@ struct MailRow: View {
     let skew: TimeInterval
     let countdown: Bool
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: Theme.s2) {
+            Initials(name: sender)
             VStack(alignment: .leading, spacing: 3) {
-                Text(mail["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? mail["fra"].text)
-                    .font(Theme.font(.subheadline, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
-                Text(mail["emne"].text).font(Theme.font(.footnote)).foregroundStyle(Theme.sec).lineLimit(2)
-                HStack(spacing: 6) {
-                    if let k = mail["kategori"].string { Pill(text: k) }
-                    if mail["foelsom"].bool { Pill(text: "Følsom", color: Theme.warn) }
-                    if mail["opfoelgning"].bool { Pill(text: "Opfølgning", color: Theme.accent) }
-                    if !countdown { Pill(text: mail["status_tekst"].text) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(sender).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
+                    Spacer(minLength: Theme.s1)
+                    if let d = mail["modtaget"].date { Text(ACTDate.time(d)).font(Theme.mono(11)).foregroundStyle(Theme.dim) }
                 }
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 3) {
-                if countdown { Countdown(deadline: mail["frist"].date, skew: skew) }
-                if let d = mail["modtaget"].date { Text(ACTDate.time(d)).font(Theme.font(.caption2)).foregroundStyle(Theme.dim) }
+                Text(clean(mail["emne"].text)).font(Theme.small).foregroundStyle(Theme.sec).lineLimit(2)
+                HStack(spacing: 6) {
+                    if countdown { CountdownPill(deadline: mail["frist"].date, skew: skew) }
+                    if let k = mail["kategori"].string { Chip(text: k) }
+                    if mail["foelsom"].bool { Chip(text: "Følsom", tone: .warn) }
+                    if mail["opfoelgning"].bool { Chip(text: "Opfølgning") }
+                    if !countdown { Chip(text: mail["status_tekst"].text, tone: mail["status"].text == "sendt" || mail["status"].text == "autosvar" ? .ok : .neutral) }
+                }
+                .padding(.top, 2)
             }
         }
-        .padding(.vertical, 2)
+    }
+    private var sender: String { mail["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? mail["fra"].text }
+}
+
+struct Initials: View {
+    let name: String
+    var size: CGFloat = 36
+    var body: some View {
+        let parts = name.split(separator: " ").prefix(2).compactMap { $0.first }.map { String($0) }.joined().uppercased()
+        Text(parts.isEmpty ? "?" : parts)
+            .font(Theme.sans(size * 0.36, .semibold)).foregroundStyle(Color.dyn(0x585858, 0xd4d4d4))
+            .frame(width: size, height: size)
+            .background(LinearGradient(colors: [Color.dyn(0xf0f0f0, 0x262626), Color.dyn(0xe6e6e6, 0x181818)], startPoint: .top, endPoint: .bottom), in: Circle())
     }
 }
 
@@ -125,76 +167,109 @@ struct MailDetail: View {
     @State private var draft = ""
     @State private var confirmSend = false
     @State private var confirmReject = false
+    @State private var showMail = false
     @State private var busy = false
     @Environment(\.dismiss) private var dismiss
 
     private var id: Int { mail["id"].int ?? 0 }
     private var waiting: Bool { ["venter", "toerloeb"].contains(mail["status"].text) }
+    private var sender: String { mail["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? mail["fra"].text }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mail["emne"].text).font(Theme.font(.title3, .bold)).foregroundStyle(Theme.ink)
-                    Text("\(mail["fra_navn"].text) <\(mail["fra"].text)>").font(Theme.font(.footnote)).foregroundStyle(Theme.sec)
-                    HStack(spacing: 6) {
-                        if let k = mail["kategori"].string { Pill(text: k) }
-                        if mail["foelsom"].bool { Pill(text: "Følsom" + (mail["foelsom_grund"].string.map { ": " + $0 } ?? ""), color: Theme.warn) }
-                        if mail["status"].text == "venter" { Countdown(deadline: mail["frist"].date, skew: m.skew) }
+            VStack(alignment: .leading, spacing: Theme.s3) {
+                HStack(alignment: .top, spacing: Theme.s2) {
+                    Initials(name: sender, size: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sender).font(Theme.cardTitle).foregroundStyle(Theme.ink)
+                        Text(mail["fra"].text + (mail["modtaget"].date.map { " · " + ACTDate.dayText($0) + " " + ACTDate.time($0) } ?? ""))
+                            .font(Theme.meta).foregroundStyle(Theme.dim)
                     }
+                    Spacer()
+                    if mail["status"].text == "venter" { CountdownPill(deadline: mail["frist"].date, skew: m.skew) }
                 }
+                Text(clean(mail["emne"].text)).font(Theme.title).foregroundStyle(Theme.ink)
+                HStack(spacing: 6) {
+                    if let k = mail["kategori"].string { Chip(text: k) }
+                    if mail["foelsom"].bool { Chip(text: "Følsom", tone: .warn) }
+                    if !waiting { Chip(text: mail["status_tekst"].text, tone: .ok) }
+                }
+                if mail["foelsom"].bool, let g = mail["foelsom_grund"].string, !g.isEmpty { Banner(title: "Følsom.", text: clean(g), tone: .warn) }
                 let auto = mail["autosvar"]
                 if auto["ok"].bool && !mail["auto_stop"].bool, let t = auto["tid"].date {
-                    Label("Autosvar sendes kl. \(ACTDate.time(t)), medmindre du handler.", systemImage: "clock.arrow.circlepath").font(Theme.font(.footnote)).foregroundStyle(Theme.warn)
+                    Banner(title: "Autosvar kl. \(ACTDate.time(t)).", text: "Det sendes, medmindre du handler før.", tone: .warn)
                 }
                 let tjek = mail["tjek"].array
                 if !tjek.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Koden fandt").font(Theme.font(.caption, .bold))
-                        ForEach(Array(tjek.enumerated()), id: \.offset) { _, t in Text(t.string ?? t["tekst"].string ?? t["grund"].text).font(Theme.font(.footnote)) }
-                    }
-                    .foregroundStyle(Theme.bad).card()
+                    Banner(title: "Koden fandt.", text: tjek.map { clean($0.string ?? $0["tekst"].string ?? $0["grund"].text) }.joined(separator: " · "), tone: .bad)
                 }
                 if mail["mangler_viden"].bool, let x = mail["mangler"].string, !x.isEmpty {
-                    Label("Mangler viden: \(x)", systemImage: "questionmark.circle").font(Theme.font(.footnote)).foregroundStyle(Theme.warn)
+                    Banner(title: "Mangler viden.", text: clean(x), tone: .warn)
                 }
-                Text(waiting ? "Svarudkast" : (mail["sendt_tekst"].isNull ? "Udkast" : "Sendt svar")).font(Theme.font(.headline))
-                if editing {
-                    TextEditor(text: $draft).font(Theme.font(.body)).frame(minHeight: 240).scrollContentBackground(.hidden)
-                        .padding(8).background(Theme.card, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent))
-                } else {
-                    Text(mail["sendt_tekst"].string ?? mail["udkast"].text).font(Theme.font(.body)).foregroundStyle(Theme.ink).textSelection(.enabled).card()
+
+                // The draft on its own sheet of paper
+                VStack(alignment: .leading, spacing: Theme.s2) {
+                    HStack {
+                        Text(waiting ? "Svarudkast" : (mail["sendt_tekst"].isNull ? "Udkast" : "Sendt svar")).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec)
+                        Spacer()
+                        Text("Til " + (mail["svar_til"].string ?? mail["fra"].text)).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
+                    }
+                    Rectangle().fill(Theme.line).frame(height: 1)
+                    Text(clean(mail["sendt_tekst"].string ?? mail["udkast"].text)).font(Theme.sans(15)).foregroundStyle(Theme.ink)
+                        .lineSpacing(5).textSelection(.enabled)
                 }
-                Text("Mailen").font(Theme.font(.headline))
-                Text(mail["tekst"].text).font(Theme.font(.footnote)).foregroundStyle(Theme.sec).textSelection(.enabled).card()
-                if !mail["vedhaeftet"].array.isEmpty {
-                    Label(mail["vedhaeftet"].array.map { $0.text }.joined(separator: ", "), systemImage: "paperclip").font(Theme.font(.caption)).foregroundStyle(Theme.dim)
-                }
-            }
-            .padding()
-        }
-        .background(Theme.bg)
-        .navigationTitle(mail["fra_navn"].string ?? "Mail").navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom) {
-            if waiting {
-                HStack(spacing: 8) {
-                    if editing {
-                        Button("Annullér") { editing = false }.buttonStyle(.bordered)
-                        Button { confirmSend = true } label: { Text("Send rettet").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
-                    } else {
-                        Button { confirmSend = true } label: { Text("Send").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
-                        Button { Task { await startEdit() } } label: { Text("Ret og send").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-                        Button { confirmReject = true } label: { Text("Afvis").frame(maxWidth: .infinity) }.buttonStyle(.bordered).tint(Theme.bad)
+                .padding(Theme.s4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.line))
+                .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
+
+                Button { withAnimation(.easeOut(duration: 0.2)) { showMail.toggle() } } label: {
+                    HStack {
+                        Text(showMail ? "Skjul mailen" : "Vis mailen").font(Theme.sans(14, .medium)).foregroundStyle(Theme.sec)
+                        Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Theme.dim).rotationEffect(.degrees(showMail ? 180 : 0))
                     }
                 }
-                .font(Theme.font(.subheadline, .semibold)).disabled(busy).padding().background(.bar)
+                .buttonStyle(.plain)
+                if showMail {
+                    VStack(alignment: .leading, spacing: Theme.s1) {
+                        Text(clean(mail["tekst"].text)).font(Theme.small).foregroundStyle(Theme.sec).lineSpacing(3).textSelection(.enabled)
+                        if !mail["vedhaeftet"].array.isEmpty {
+                            Label(mail["vedhaeftet"].array.map { $0.text }.joined(separator: ", "), systemImage: "paperclip").font(Theme.meta).foregroundStyle(Theme.dim)
+                        }
+                    }
+                    .card()
+                }
+            }
+            .padding(Theme.s3)
+        }
+        .screen()
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if waiting {
+                HStack(spacing: Theme.s1) {
+                    Button { confirmSend = true } label: { Text("Send") }.buttonStyle(.primary)
+                    Button { Task { await startEdit() } } label: { Text("Ret og send") }.buttonStyle(.secondary)
+                    Button { confirmReject = true } label: { Text("Afvis") }.buttonStyle(.danger)
+                }
+                .disabled(busy)
+                .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2).background(.bar)
             }
         }
         .confirmationDialog("Send svaret til \(mail["svar_til"].string ?? mail["fra"].text)?", isPresented: $confirmSend, titleVisibility: .visible) {
-            Button("Send") { Task { await send() } }
+            Button("Send") { Task { await send(nil) } }
+            Button("Annullér", role: .cancel) {}
         }
-        .confirmationDialog("Afvis mailen? Intet sendes, og opgaven lukkes.", isPresented: $confirmReject, titleVisibility: .visible) {
-            Button("Afvis", role: .destructive) { Task { busy = true; if await m.act("api/svarvagt/\(id)/afvis", [:], ok: "Afvist") { dismiss() }; busy = false } }
+        .confirmationDialog("Afvis mailen?", isPresented: $confirmReject, titleVisibility: .visible) {
+            Button("Afvis", role: .destructive) {
+                Task { busy = true; if await m.act("api/svarvagt/\(id)/afvis", [:], ok: "Mailen er afvist", reject: true) { dismiss() }; busy = false }
+            }
+            Button("Annullér", role: .cancel) {}
+        } message: { Text("Intet sendes, og opgaven lukkes.") }
+        .sheet(isPresented: $editing) {
+            EditDraftSheet(to: mail["svar_til"].string ?? mail["fra"].text, subject: clean(mail["emne"].text), text: $draft) {
+                await send(draft)
+            }
         }
     }
 
@@ -206,11 +281,51 @@ struct MailDetail: View {
         }
     }
 
-    private func send() async {
+    private func send(_ text: String?) async {
         busy = true
         var b: [String: Any] = ["bekraeft": true]
-        if editing { b["tekst"] = draft }
-        if await m.act("api/svarvagt/\(id)/send", b, ok: "Sendt") { dismiss() }
+        if let text { b["tekst"] = text }
+        if await m.act("api/svarvagt/\(id)/send", b, ok: "Svaret er sendt") { editing = false; dismiss() }
         busy = false
+    }
+}
+
+struct EditDraftSheet: View {
+    let to: String
+    let subject: String
+    @Binding var text: String
+    let send: () async -> Void
+    @State private var confirm = false
+    @State private var busy = false
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Theme.s2) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Til " + to).font(Theme.meta).foregroundStyle(Theme.dim)
+                    Text(subject).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
+                }
+                Rectangle().fill(Theme.line).frame(height: 1)
+                TextEditor(text: $text).font(Theme.sans(15)).lineSpacing(4).focused($focused).scrollContentBackground(.hidden)
+            }
+            .padding(Theme.s3)
+            .background(Theme.surface.ignoresSafeArea())
+            .navigationTitle("Ret svaret").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Annullér") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send") { confirm = true }.font(Theme.button)
+                        .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .confirmationDialog("Send det rettede svar til \(to)?", isPresented: $confirm, titleVisibility: .visible) {
+                Button("Send") { Task { busy = true; await send(); busy = false } }
+                Button("Annullér", role: .cancel) {}
+            }
+            .onAppear { focused = true }
+        }
+        .interactiveDismissDisabled(busy)
     }
 }

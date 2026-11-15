@@ -119,21 +119,22 @@ struct RootView: View {
         ZStack {
             if !api.loggedIn { LoginView() }
             else { MainTabs() }
-            if lock.enabled && lock.locked && api.loggedIn { LockView() }
+            // Covers content straight away when the app loses focus (app switcher, Control Center).
+            if lock.enabled && api.loggedIn && (lock.locked || phase != .active) { LockView() }
             if let t = toast.text {
                 VStack {
                     Spacer()
-                    Text(t).font(Theme.font(.subheadline, .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Color.black.opacity(0.82), in: Capsule())
-                        .padding(.bottom, 96)
+                    Text(t).font(Theme.sans(14, .medium)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, Theme.s3).padding(.vertical, 10)
+                        .background(Theme.accent, in: Capsule())
+                        .padding(.bottom, 92)
                 }
-                .transition(.opacity).allowsHitTesting(false)
+                .transition(.move(edge: .bottom).combined(with: .opacity)).allowsHitTesting(false)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: toast.text)
+        .animation(.easeOut(duration: 0.18), value: toast.text)
         .tint(Theme.accent)
-        .fontDesign(.rounded)
+        .font(Theme.body)
         .onChange(of: phase) { _, p in
             if p == .background && lock.enabled { lock.locked = true }
             if p == .active && lock.enabled && lock.locked && api.loggedIn { lock.unlock() }
@@ -143,13 +144,20 @@ struct RootView: View {
 }
 
 struct LockView: View {
+    @ObservedObject private var lock = Lock.shared
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
-            VStack(spacing: 18) {
-                Image("Logo").resizable().frame(width: 84, height: 84)
-                Button { Lock.shared.unlock() } label: { Label("Lås op", systemImage: "faceid").font(Theme.font(.headline)) }
-                    .buttonStyle(.borderedProminent)
+            VStack(spacing: Theme.s3) {
+                KTile(size: 72)
+                VStack(spacing: 4) {
+                    Text("Kaneo ACT er låst").font(Theme.sans(20, .semibold)).foregroundStyle(Theme.ink)
+                    Text("Lås op for at se beslutninger, mail og tal.").font(Theme.small).foregroundStyle(Theme.sec)
+                }
+                if lock.locked {
+                    Button { lock.unlock() } label: { Label("Lås op", systemImage: "faceid") }
+                        .buttonStyle(PillButton(kind: .primary, full: false)).padding(.top, Theme.s1)
+                }
             }
         }
     }
@@ -163,20 +171,23 @@ struct LoginView: View {
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
-            VStack(spacing: 22) {
+            // A soft grey glow behind the tile: light on a surface, not a gradient.
+            RadialGradient(colors: [Theme.ink.opacity(0.06), Theme.ink.opacity(0.03), .clear], center: .init(x: 0.5, y: 0.3), startRadius: 0, endRadius: 320)
+                .ignoresSafeArea()
+            VStack(spacing: 0) {
                 Spacer()
-                Image("Logo").resizable().frame(width: 96, height: 96)
-                VStack(spacing: 6) {
-                    Text("Kaneo ACT").font(Theme.font(.largeTitle, .bold)).foregroundStyle(Theme.ink)
-                    Text("Beslutninger, mail, Neo og bilag.").font(Theme.font(.subheadline)).foregroundStyle(Theme.sec)
-                }
+                KTile(size: 88)
+                Text("Velkommen til Kaneo ACT").font(Theme.sans(26, .semibold)).foregroundStyle(Theme.ink)
+                    .padding(.top, Theme.s4)
+                Text("Log ind for at se, hvad der venter på dig i dag.").font(Theme.body).foregroundStyle(Theme.sec)
+                    .multilineTextAlignment(.center).padding(.top, Theme.s1).padding(.horizontal, Theme.s4)
                 Spacer()
-                if let error { ErrorLine(text: error).padding(.horizontal) }
+                if let error { Banner(title: "Login gik ikke.", text: error, tone: .bad).padding(.horizontal, Theme.s4).padding(.bottom, Theme.s2) }
                 Button {
                     busy = true; error = nil
                     Task {
-                        do { try await web.login(); Push.shared.ask() }
-                        catch let e as APIError { error = e.message }
+                        do { try await web.login(); Haptic.approve(); Push.shared.ask() }
+                        catch let e as APIError { error = e.message; Haptic.fail() }
                         catch {
                             let ns = error as NSError
                             if !(ns.domain == ASWebAuthenticationSessionErrorDomain && ns.code == 1) { self.error = error.localizedDescription }
@@ -184,13 +195,16 @@ struct LoginView: View {
                         busy = false
                     }
                 } label: {
-                    HStack { if busy { ProgressView().tint(.white) }; Text("Log ind med Kaneo").font(Theme.font(.headline)) }
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    ZStack {
+                        Text("Log ind med Kaneo").opacity(busy ? 0 : 1)
+                        if busy { ProgressView().tint(Theme.onAccent) }
+                    }
                 }
-                .buttonStyle(.borderedProminent).tint(Theme.brand)
+                .buttonStyle(.primary)
                 .disabled(busy)
-                .padding(.horizontal, 24)
-                Text("Kun for ACT-admins.").font(Theme.font(.caption)).foregroundStyle(Theme.dim).padding(.bottom, 24)
+                .padding(.horizontal, Theme.s4)
+                Text("Kun for ACT-administratorer.").font(Theme.meta).foregroundStyle(Theme.dim)
+                    .padding(.top, Theme.s2).padding(.bottom, Theme.s4)
             }
         }
     }
@@ -202,14 +216,15 @@ struct MainTabs: View {
 
     var body: some View {
         TabView(selection: $router.tab) {
-            TodayView().tabItem { Label("I dag", systemImage: "sun.max") }.tag(Tab.idag)
-            DecisionsView().tabItem { Label("Beslutninger", systemImage: "checkmark.seal") }.tag(Tab.beslut)
+            TodayView().tabItem { Label("I dag", systemImage: "house") }.tag(Tab.idag)
+            DecisionsView().tabItem { Label("Beslutninger", systemImage: "checkmark.circle") }.tag(Tab.beslut)
                 .badge(store.decisions.count)
-            MailView().tabItem { Label("Mail", systemImage: "envelope") }.tag(Tab.mail)
+            MailView().tabItem { Label("Mail", systemImage: "tray") }.tag(Tab.mail)
                 .badge(store.mailOpen)
-            NeoView().tabItem { Label("Neo", systemImage: "sparkles") }.tag(Tab.neo)
-            MoreView().tabItem { Label("Mere", systemImage: "ellipsis.circle") }.tag(Tab.mere)
+            NeoView().tabItem { Label("Neo", systemImage: "waveform") }.tag(Tab.neo)
+            MoreView().tabItem { Label("Mere", systemImage: "person") }.tag(Tab.mere)
         }
+        .tabBarMinimizeIfAvailable()
         .task { Push.shared.ask(); await store.load() }
         .onChange(of: router.stamp) { _, _ in Task { await store.load() } }
     }
@@ -240,5 +255,16 @@ struct MainTabs: View {
         guard case .obj(var o) = overblik else { return }
         o["beslutninger"] = .arr(decisions.filter { $0["id"].text != id })
         overblik = .obj(o)
+    }
+}
+
+extension View {
+    /// The system tab bar minimises on scroll where iOS offers it (iOS 26); older iOS keeps it.
+    @ViewBuilder func tabBarMinimizeIfAvailable() -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { self.tabBarMinimizeBehavior(.onScrollDown) } else { self }
+        #else
+        self
+        #endif
     }
 }
