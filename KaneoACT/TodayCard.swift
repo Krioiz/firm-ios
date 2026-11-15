@@ -164,7 +164,7 @@ struct TodayDetail: View {
         }
         .screen()
         .refreshable { await store.loadToday() }
-        .navigationTitle("30 dage")
+        .navigationTitle("30 dage").navigationBarTitleDisplayMode(.inline)
     }
 
     private func block(_ title: String, _ sub: String, _ pts: [DayPoint]) -> some View {

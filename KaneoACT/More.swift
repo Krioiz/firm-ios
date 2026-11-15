@@ -9,13 +9,12 @@ struct NavRow: View {
     var detail: String? = nil
     var body: some View {
         HStack(spacing: Theme.s2) {
-            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Theme.sec).frame(width: 24)
+            RowIcon(symbol: icon)
             Text(title).font(Theme.rowTitle).foregroundStyle(Theme.ink)
             Spacer()
             if let detail { Text(detail).font(Theme.small).foregroundStyle(Theme.dim) }
             Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.dim)
         }
-        .frame(minHeight: 32)
     }
 }
 
@@ -36,26 +35,25 @@ struct MoreView: View {
                     }
                     .padding(.bottom, Theme.s2)
                     SectionHead(title: "Overblik")
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         NavigationLink { BriefView() } label: { NavRow(icon: "sun.horizon", title: "Morgenbrief") }.buttonStyle(Press())
                         NavigationLink { DeadlinesView() } label: { NavRow(icon: "calendar", title: "Frister") }.buttonStyle(Press())
                         NavigationLink { EconomyView() } label: { NavRow(icon: "chart.bar", title: "Økonomi") }.buttonStyle(Press())
                     }
                     SectionHead(title: "Kaneo ACT")
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         NavigationLink { BilagView() } label: { NavRow(icon: "doc.text", title: "Bilag") }.buttonStyle(Press())
                         NavigationLink { AgentsView() } label: { NavRow(icon: "person.2", title: "Agenter") }.buttonStyle(Press())
                     }
                     SectionHead(title: "Konto")
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         NavigationLink { SettingsView() } label: { NavRow(icon: "gearshape", title: "Indstillinger") }.buttonStyle(Press())
                         Button { confirmLogout = true } label: {
                             HStack(spacing: Theme.s2) {
-                                Image(systemName: "rectangle.portrait.and.arrow.right").font(.system(size: 16)).foregroundStyle(Theme.bad).frame(width: 24)
+                                RowIcon(symbol: "rectangle.portrait.and.arrow.right", tone: Theme.bad)
                                 Text("Log ud").font(Theme.rowTitle).foregroundStyle(Theme.bad)
                                 Spacer()
                             }
-                            .frame(minHeight: 32)
                         }
                         .buttonStyle(Press())
                     }
@@ -136,11 +134,12 @@ struct BilagView: View {
                 }
                 if only == nil && !l.data["seneste"].array.isEmpty {
                     SectionHead(title: "Seneste")
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         ForEach(l.data["seneste"].array.prefix(12).map { $0 }, id: \.self) { b in
-                            HStack {
+                            HStack(spacing: Theme.s2) {
+                                RowIcon(symbol: "doc.text")
+                                Text(clean(b["felter"]["leverandoer"].string ?? "Ukendt")).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
                                 Text("B\(b["nr"].text)").font(Theme.code).foregroundStyle(Theme.dim)
-                                Text(clean(b["felter"]["leverandoer"].string ?? "Ukendt")).font(Theme.small).foregroundStyle(Theme.ink).lineLimit(1)
                                 Spacer()
                                 Chip(text: b["status_tekst"].text, tone: b["status"].text == "bogfoert" ? .ok : b["status"].text == "fejl" ? .bad : .neutral)
                             }
@@ -151,7 +150,8 @@ struct BilagView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle(only == nil ? "Bilag" : "Bilag")
+        .navigationTitle("Bilag").navigationBarTitleDisplayMode(.inline)
+        .animation(.easeOut(duration: 0.25), value: l.loaded)
         .task { await l.load() }
         .refreshable { await l.load() }
         .quickLookPreview($preview)
@@ -180,7 +180,7 @@ struct BilagView: View {
                 HStack(spacing: Theme.s1) { ProgressView().controlSize(.small); Text("Læses af den lokale model").font(Theme.small).foregroundStyle(Theme.sec) }
             } else {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(kr(f["inkl"].double, f["valuta"].string ?? "DKK")).font(Theme.sans(26, .semibold)).monospacedDigit().foregroundStyle(Theme.ink)
+                    Text(kr(f["inkl"].double, f["valuta"].string ?? "DKK")).font(Theme.mono(26, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
                     Text("inkl. moms").font(Theme.meta).foregroundStyle(Theme.dim)
                 }
                 VStack(spacing: 6) {
@@ -197,7 +197,7 @@ struct BilagView: View {
             if let t = b["bogfoer_efter"].date, st == "venter" { Text("Bogføres \(ACTDate.dayText(t)) kl. \(ACTDate.time(t)), medmindre du trykker Stop.").font(Theme.meta).foregroundStyle(Theme.sec) }
             HStack(spacing: Theme.s1) {
                 if b["fil"].bool {
-                    Button { Task { await open(id) } } label: { Image(systemName: "doc.viewfinder") }.buttonStyle(PillButton(kind: .secondary, full: false))
+                    Button { Task { await open(id) } } label: { Text("Se filen") }.buttonStyle(PillButton(kind: .secondary, full: false))
                 }
                 if st == "kladde" {
                     Button("Opret kladde i Dinero") {
@@ -263,7 +263,7 @@ struct AgentsView: View {
                 SectionHead(title: "Agenter")
                 if !l.loaded { SkeletonRows(count: 5) }
                 else {
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         ForEach(l.data.array, id: \.self) { a in
                             NavigationLink { AgentDetail(a: a) } label: { AgentRow(a: a) }.buttonStyle(Press())
                         }
@@ -273,7 +273,8 @@ struct AgentsView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle("Agenter")
+        .navigationTitle("Agenter").navigationBarTitleDisplayMode(.inline)
+        .animation(.easeOut(duration: 0.25), value: l.loaded)
         .task { await l.load(); await p.load() }
         .refreshable { await l.load(); await p.load() }
         .confirmationDialog(paused ? "Genoptag alle agenter?" : "Sæt alle agenter på pause?", isPresented: $confirm, titleVisibility: .visible) {
@@ -300,7 +301,8 @@ struct AgentRow: View {
     var body: some View {
         let st = agentStatus(a)
         HStack(spacing: Theme.s2) {
-            Dot(tone: st.1)
+            Initials(name: a["navn"].text, size: RowIcon.size)
+                .overlay(alignment: .bottomTrailing) { Circle().fill(st.1.color).frame(width: 9, height: 9).overlay(Circle().stroke(Theme.surface, lineWidth: 2)) }
             VStack(alignment: .leading, spacing: 2) {
                 Text(a["navn"].text).font(Theme.rowTitle).foregroundStyle(Theme.ink)
                 if let d = a["sidst"].date {
@@ -309,8 +311,8 @@ struct AgentRow: View {
                 } else if let pl = a["plan"].string { Text(clean(pl)).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1) }
             }
             Spacer()
-            if let n = a["aabne"].int, n > 0 { Text("\(n)").font(Theme.mono(12)).foregroundStyle(Theme.sec) }
-            Chip(text: st.0, tone: st.1)
+            if let n = a["aabne"].int, n > 0 { Text("\(n)").font(Theme.mono(12)).monospacedDigit().foregroundStyle(Theme.sec) }
+            Chip(text: st.0, tone: st.1).frame(minWidth: 64, alignment: .trailing)
         }
     }
 }
@@ -354,7 +356,7 @@ struct AgentDetail: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle(a["navn"].text)
+        .navigationTitle(a["navn"].text).navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -373,7 +375,7 @@ struct EconomyView: View {
                 if let e = l.error { ErrorLine(text: e).padding(.bottom, Theme.s2) }
                 VStack(alignment: .leading, spacing: Theme.s1) {
                     Text("Resultat · " + (now["navn"].string ?? now["maaned"].string ?? "denne måned")).font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec)
-                    Text(kr(now["resultat"].double)).font(Theme.sans(40, .semibold)).monospacedDigit()
+                    Text(kr(now["resultat"].double)).font(Theme.mono(36, .medium)).monospacedDigit()
                         .foregroundStyle((now["resultat"].double ?? 0) < 0 ? Theme.bad : Theme.ink)
                         .redacted(reason: l.loaded ? [] : .placeholder)
                     Text("Omsætning \(kr(now["omsaetning"].double)) · udgifter \(kr(now["udgifter"].double))").font(Theme.small).foregroundStyle(Theme.sec)
@@ -431,7 +433,8 @@ struct EconomyView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle("Økonomi")
+        .navigationTitle("Økonomi").navigationBarTitleDisplayMode(.inline)
+        .animation(.easeOut(duration: 0.25), value: l.loaded)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { busy = true; await l.act("api/oekonomi/opdater", ok: "Tallene er opdateret fra Dinero"); busy = false } } label: {
@@ -490,7 +493,7 @@ struct SettingsView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle("Indstillinger")
+        .navigationTitle("Indstillinger").navigationBarTitleDisplayMode(.inline)
         .task {
             status = (try? await API.shared.get("api/app/status")) ?? .null
             let s = await UNUserNotificationCenter.current().notificationSettings()
@@ -512,7 +515,7 @@ struct BriefView: View {
         }
         .screen()
         .refreshable { await store.load() }
-        .navigationTitle("Morgenbrief")
+        .navigationTitle("Morgenbrief").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -527,7 +530,7 @@ struct DeadlinesView: View {
                 else if all.isEmpty {
                     EmptyState(icon: "calendar", title: "Ingen frister", text: "Når en opgave, en moms- eller kundefrist nærmer sig, står den her.")
                 } else {
-                    Rows {
+                    Rows(inset: RowIcon.textInset) {
                         ForEach(all, id: \.self) { f in DeadlineRow(f: f) }
                     }
                 }
@@ -535,7 +538,8 @@ struct DeadlinesView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle("Frister")
+        .navigationTitle("Frister").navigationBarTitleDisplayMode(.inline)
+        .animation(.easeOut(duration: 0.25), value: l.loaded)
         .task { await l.load() }
         .refreshable { await l.load() }
     }
@@ -546,15 +550,17 @@ struct DeadlineRow: View {
     var body: some View {
         let d = f["dato"].date
         let over = d.map { $0 < Calendar.current.startOfDay(for: Date()) } ?? false
+        let today = d.map { Calendar.current.isDateInToday($0) } ?? false
         HStack(spacing: Theme.s2) {
-            if over { Dot(tone: .bad) } else if d.map({ Calendar.current.isDateInToday($0) }) ?? false { Dot(tone: .warn) }
+            RowIcon(symbol: f["type"].text == "kunde" ? "person.crop.square" : f["type"].text == "fast" ? "building.columns" : "calendar",
+                    tone: over ? Theme.bad : today ? Theme.warn : Theme.sec)
             VStack(alignment: .leading, spacing: 2) {
                 Text(clean(f["titel"].text)).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(2)
                 Text([f["kode"].string, f["ansvarlig"].string, f["type"].text == "fast" ? "fast frist" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
             }
             Spacer()
-            Text(d.map { ACTDate.dayText($0) } ?? f["dato"].text).font(Theme.mono(12)).foregroundStyle(over ? Theme.bad : Theme.sec)
+            Text(d.map { ACTDate.dayText($0) } ?? f["dato"].text).font(Theme.mono(12)).monospacedDigit().foregroundStyle(over ? Theme.bad : Theme.sec)
         }
     }
 }

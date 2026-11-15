@@ -100,6 +100,8 @@ struct MailView: View {
             }
             .listStyle(.plain)
             .screen()
+            .animation(.easeOut(duration: 0.25), value: m.open.map { $0["id"].text })
+            .animation(.easeOut(duration: 0.25), value: m.loaded)
             .refreshable { await m.load() }
             .navigationTitle("Mail")
             .task { await m.load() }
@@ -117,8 +119,7 @@ struct MailView: View {
 
     private func row(_ mail: JSON, countdown: Bool) -> some View {
         NavigationLink { MailDetail(mail: mail, m: m) } label: { MailRow(mail: mail, skew: m.skew, countdown: countdown) }
-            .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
-            .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
+            .listRow()
     }
 }
 
@@ -128,7 +129,7 @@ struct MailRow: View {
     let countdown: Bool
     var body: some View {
         HStack(alignment: .top, spacing: Theme.s2) {
-            Initials(name: sender)
+            Initials(name: sender, size: RowIcon.size)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(sender).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(1)
@@ -152,7 +153,7 @@ struct MailRow: View {
 
 struct Initials: View {
     let name: String
-    var size: CGFloat = 36
+    var size: CGFloat = 32
     var body: some View {
         let parts = name.split(separator: " ").prefix(2).compactMap { $0.first }.map { String($0) }.joined().uppercased()
         Text(parts.isEmpty ? "?" : parts)

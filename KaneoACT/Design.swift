@@ -134,15 +134,17 @@ struct PillButton: ButtonStyle {
     var full = true
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(Theme.button)
+            .font(kind == .primary ? Theme.button : Theme.sans(15, .medium))
             .lineLimit(1).minimumScaleFactor(0.85)
             .foregroundStyle(kind == .primary ? Theme.onAccent : kind == .danger ? Theme.bad : Theme.ink)
             .frame(maxWidth: full ? .infinity : nil, minHeight: 44)
-            .padding(.horizontal, Theme.s3)
-            .background(kind == .primary ? Theme.accent : Theme.raised, in: Capsule())
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .opacity(configuration.isPressed ? 0.9 : 1)
+            .padding(.horizontal, kind == .primary ? Theme.s3 : Theme.s1)
+            .background(kind == .primary ? Theme.accent : Color.clear, in: Capsule())
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? (kind == .primary ? 0.9 : 0.6) : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, new in new }
     }
 }
 extension ButtonStyle where Self == PillButton {
@@ -185,13 +187,16 @@ extension View {
 
 /// Rows in one surface, divided by hairlines (lists, not boxes in boxes).
 struct Rows<Content: View>: View {
+    /// Where the hairline starts: at the text. With a 32 pt logo in front, that is 16 + 32 + 12.
+    var inset: CGFloat = Theme.s3
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group(subviews: content) { subs in
                 ForEach(Array(subs.enumerated()), id: \.offset) { i, v in
-                    v.padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2)
-                    if i < subs.count - 1 { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, Theme.s3) }
+                    v.frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                        .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2)
+                    if i < subs.count - 1 { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, inset) }
                 }
             }
         }
@@ -299,18 +304,45 @@ struct EmptyState: View {
 struct SkeletonRows: View {
     var count = 4
     var body: some View {
-        Rows {
-            ForEach(0..<count, id: \.self) { _ in
+        Rows(inset: RowIcon.textInset) {
+            ForEach(0..<count, id: \.self) { i in
                 HStack(spacing: Theme.s2) {
-                    RoundedRectangle(cornerRadius: 8).fill(Theme.raised).frame(width: 32, height: 32)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.raised).frame(width: 32, height: 32)
                     VStack(alignment: .leading, spacing: 6) {
-                        RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: 180, height: 12)
-                        RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: 120, height: 10)
+                        RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: [180, 150, 200, 130][i % 4], height: 12)
+                        RoundedRectangle(cornerRadius: 4).fill(Theme.raised).frame(width: 110, height: 10)
                     }
                     Spacer()
                 }
+                .frame(minHeight: 28)
             }
         }
+        .accessibilityLabel("Henter")
+    }
+}
+
+/// The 32 pt square every row starts with: a logo, initials or an SF Symbol on a grey tile.
+struct RowIcon: View {
+    static let size: CGFloat = 32
+    static let textInset: CGFloat = Theme.s3 + size + Theme.s2
+    let symbol: String
+    var tone: Color = Theme.sec
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.raised)
+            Image(systemName: symbol).font(.system(size: 14, weight: .regular)).foregroundStyle(tone)
+        }
+        .frame(width: Self.size, height: Self.size)
+    }
+}
+
+extension View {
+    /// The common List row: 52 pt minimum, the same insets everywhere, hairline from the text.
+    func listRow() -> some View {
+        frame(minHeight: 28)
+            .listRowInsets(EdgeInsets(top: Theme.s2, leading: Theme.s3, bottom: Theme.s2, trailing: Theme.s3))
+            .listRowBackground(Theme.bg).listRowSeparatorTint(Theme.line)
+            .alignmentGuide(.listRowSeparatorLeading) { _ in RowIcon.textInset - Theme.s3 }
     }
 }
 

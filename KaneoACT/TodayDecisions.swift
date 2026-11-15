@@ -155,6 +155,8 @@ struct DecisionsView: View {
             }
             .listStyle(.plain)
             .screen()
+            .animation(.easeOut(duration: 0.25), value: grouped.flatMap { $0.items.map { $0["id"].text } })
+            .animation(.easeOut(duration: 0.25), value: store.loaded)
             .refreshable { await store.load() }
             .navigationTitle("Beslutninger")
             .navigationDestination(item: $opened) { c in DecisionDetail(c: c) }
@@ -182,7 +184,7 @@ struct DecisionCard: View {
         VStack(alignment: .leading, spacing: Theme.s2) {
             VStack(alignment: .leading, spacing: Theme.s2) {
                 HStack(alignment: .top, spacing: Theme.s2) {
-                    BrandIcon(item: c, size: 40)
+                    BrandIcon(item: c, size: 32)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(clean(c["navn"].text)).font(Theme.cardTitle).foregroundStyle(Theme.ink).lineLimit(3).multilineTextAlignment(.leading)
                         HStack(spacing: 6) {

@@ -225,13 +225,14 @@ struct NeoView: View {
                     Text("Svar på en beslutning").font(Theme.tag).foregroundStyle(Theme.dim).padding(.horizontal, Theme.s3).padding(.top, Theme.s2).padding(.bottom, 4)
                     ForEach(atList, id: \.self) { c in
                         Button { pick(c) } label: {
-                            HStack(spacing: Theme.s1) {
-                                BrandIcon(item: c, size: 24)
+                            HStack(spacing: Theme.s2) {
+                                BrandIcon(item: c, size: RowIcon.size)
                                 Text(kode(c)).font(Theme.code).foregroundStyle(Theme.dim)
                                 Text(clean(c["navn"].text)).font(Theme.small).foregroundStyle(Theme.ink).lineLimit(1)
                                 Spacer()
                             }
-                            .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1).contentShape(Rectangle())
+                            .frame(minHeight: 44)
+                            .padding(.horizontal, Theme.s3).padding(.vertical, 4).contentShape(Rectangle())
                         }
                         .buttonStyle(Press())
                     }
