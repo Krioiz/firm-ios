@@ -28,6 +28,10 @@ schemes:
     build:
       targets: { Tradster: all }
     archive: { config: Release }
+  KaneoACT:
+    build:
+      targets: { KaneoACT: all }
+    archive: { config: Release }
 
 targets:
   Firm:
@@ -160,3 +164,33 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.firm.widget"
         CODE_SIGN_ENTITLEMENTS: FirmWidget/FirmWidget.entitlements
         SKIP_INSTALL: true
+
+  # Kaneo ACT — Marco's internal system (act.kaneo.ai) as a native app. Logs in through ACT's own
+  # Kaneo login (ASWebAuthenticationSession, kaneoact:// callback) and talks to ACT's /api with a
+  # bearer token kept in the Keychain. Self-contained sources, its own bundle id.
+  KaneoACT:
+    type: application
+    platform: iOS
+    sources: [KaneoACT]
+    info:
+      path: KaneoACT/Info.plist
+      properties:
+        CFBundleDisplayName: Kaneo ACT
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # App Store validation (409, 14 Oct 2026): portrait-only is only allowed with full screen.
+        UIRequiresFullScreen: true
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: false }
+        ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: Lås Kaneo ACT op med Face ID.
+        NSMicrophoneUsageDescription: Diktér beskeder til Neo.
+        NSSpeechRecognitionUsageDescription: Det du siger bliver til tekst på telefonen, som sendes til Neo.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.getstubbie.kaneoact
+        PROVISIONING_PROFILE_SPECIFIER: "match Development com.getstubbie.kaneoact"
+        CODE_SIGN_ENTITLEMENTS: KaneoACT/KaneoACT.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "1.0"

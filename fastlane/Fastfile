@@ -42,7 +42,7 @@ def prepare(type, ids = nil)
     File.write("../project.yml", spec.gsub("match Development ", "match AppStore "))
     UI.message("project.yml switched to the AppStore profiles")
     # An App Store profile carries aps-environment production; the entitlements file must agree.
-    ["../Tradster/Tradster.entitlements", "../Firm/Firm.entitlements"].each do |ent|
+    ["../Tradster/Tradster.entitlements", "../Firm/Firm.entitlements", "../KaneoACT/KaneoACT.entitlements"].each do |ent|
       File.write(ent, File.read(ent).gsub("<string>development</string>", "<string>production</string>")) if File.exist?(ent)
     end
   end
