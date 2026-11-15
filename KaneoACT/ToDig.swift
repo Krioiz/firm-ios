@@ -264,6 +264,14 @@ struct ToDigView: View {
     }
 
     @ViewBuilder private var rows: some View {
+        Button { path.append(.idag) } label: {
+            TodayCard(d: store.idag, loaded: store.idagLoaded, failed: store.idagFailed)
+        }
+        .buttonStyle(Press())
+        .accessibilityHint("Viser de samme tal over 30 dage")
+        .listRowInsets(EdgeInsets(top: Theme.s1, leading: Theme.s3, bottom: Theme.s3, trailing: Theme.s3))
+        .listRowBackground(Color.clear).listRowSeparator(.hidden)
+
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(Theme.sans(17, .medium)).foregroundStyle(Theme.sec)
             if store.overblik["pause"]["pause"].bool {
@@ -362,9 +370,10 @@ struct SearchSheet: View {
 
 /// Where a row leads.
 enum NavTarget: Hashable {
-    case item(JSON), mail(JSON), bilag(String), beslutning(JSON)
+    case item(JSON), mail(JSON), bilag(String), beslutning(JSON), idag
     @MainActor @ViewBuilder var view: some View {
         switch self {
+        case .idag: TodayDetail()
         case .item(let c): ItemDetail(c: c)
         case .mail(let m): MailDetail(mail: m, m: MailModel.shared)
         case .bilag(let id): BilagView(only: id)

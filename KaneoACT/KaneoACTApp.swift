@@ -252,6 +252,9 @@ struct MainTabs: View {
 @MainActor final class Store: ObservableObject {
     static let shared = Store()
     @Published var overblik: JSON = .null
+    @Published var idag: JSON = .null
+    @Published var idagFailed = false
+    @Published var idagLoaded = false
     @Published var alle: [JSON] = []
     @Published var error: String?
     @Published var loaded = false
@@ -263,7 +266,8 @@ struct MainTabs: View {
         // Mail and bilag first, so the list and the badges are complete when overblik publishes.
         async let m: () = MailModel.shared.load()
         async let b: () = Store.bilagLoader.load()
-        _ = await (m, b)
+        async let t: () = loadToday()
+        _ = await (m, b, t)
         do {
             async let o = API.shared.get("api/overblik")
             async let a = API.shared.get("api/alle")
@@ -272,6 +276,11 @@ struct MainTabs: View {
         } catch { self.error = error.localizedDescription }
         loaded = true
         updateBadge()
+    }
+
+    func loadToday() async {
+        do { idag = try await API.shared.get("api/app/idag"); idagFailed = false } catch { idagFailed = true }
+        idagLoaded = true
     }
 
     func drop(_ id: String) {
