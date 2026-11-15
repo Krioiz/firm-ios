@@ -19,7 +19,13 @@ enum Tab: Hashable { case idag, beslut, mail, neo, mere }
     @Published var tab: Tab = .idag
     /// Bumped whenever something changes on the server, so every tab reloads on its next appearance.
     @Published var stamp = 0
+    /// Text to put in Neo's field when it opens with context ("Om mailen fra ...: ").
+    @Published var neoDraft: String?
     func changed() { stamp += 1 }
+    func askNeo(_ draft: String?) {
+        if let draft { neoDraft = draft }
+        tab = .neo
+    }
 }
 
 // MARK: - Push (APNs)
@@ -124,12 +130,22 @@ struct RootView: View {
             if let t = toast.text {
                 VStack {
                     Spacer()
-                    Text(t).font(Theme.sans(14, .medium)).foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, Theme.s3).padding(.vertical, 10)
-                        .background(Theme.accent, in: Capsule())
-                        .padding(.bottom, 92)
+                    HStack(spacing: Theme.s2) {
+                        Text(t).font(Theme.sans(14, .medium)).foregroundStyle(Theme.onAccent)
+                        if let u = toast.undo {
+                            Button { u(); toast.dismiss() } label: {
+                                Text("Fortryd").font(Theme.sans(14, .semibold)).foregroundStyle(Theme.onAccent).underline()
+                                    .frame(minHeight: 44)
+                            }
+                            .accessibilityHint("Fortryder handlingen")
+                        }
+                    }
+                    .padding(.horizontal, Theme.s3).padding(.vertical, toast.undo == nil ? 10 : 0)
+                    .background(Theme.accent, in: Capsule())
+                    .padding(.bottom, 92)
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity)).allowsHitTesting(false)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .allowsHitTesting(toast.undo != nil)
             }
         }
         .animation(.easeOut(duration: 0.18), value: toast.text)
@@ -216,7 +232,8 @@ struct MainTabs: View {
 
     var body: some View {
         TabView(selection: $router.tab) {
-            TodayView().tabItem { Label("I dag", systemImage: "house") }.tag(Tab.idag)
+            ToDigView().tabItem { Label("Til dig", systemImage: "house") }.tag(Tab.idag)
+                .badge(store.items.count)
             DecisionsView().tabItem { Label("Beslutninger", systemImage: "checkmark.circle") }.tag(Tab.beslut)
                 .badge(store.decisions.count)
             MailView().tabItem { Label("Mail", systemImage: "tray") }.tag(Tab.mail)
@@ -225,6 +242,9 @@ struct MainTabs: View {
             MoreView().tabItem { Label("Mere", systemImage: "person") }.tag(Tab.mere)
         }
         .tabBarMinimizeIfAvailable()
+        .overlay(alignment: .bottomTrailing) {
+            if router.tab != .neo { NeoButton().padding(.trailing, Theme.s3).padding(.bottom, 64) }
+        }
         .task { Push.shared.ask(); await store.load() }
         .onChange(of: router.stamp) { _, _ in Task { await store.load() } }
     }
@@ -242,6 +262,10 @@ struct MainTabs: View {
     var mailOpen: Int { overblik["mail"].int ?? 0 }
 
     func load() async {
+        // Mail and bilag first, so the list and the badges are complete when overblik publishes.
+        async let m: () = MailModel.shared.load()
+        async let b: () = Store.bilagLoader.load()
+        _ = await (m, b)
         do {
             async let o = API.shared.get("api/overblik")
             async let a = API.shared.get("api/alle")
@@ -249,6 +273,7 @@ struct MainTabs: View {
             error = nil
         } catch { self.error = error.localizedDescription }
         loaded = true
+        updateBadge()
     }
 
     func drop(_ id: String) {

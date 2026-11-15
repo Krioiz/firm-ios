@@ -106,6 +106,7 @@ struct NeoView: View {
     @StateObject private var m = NeoModel()
     @StateObject private var dict = Dictation()
     @ObservedObject private var store = Store.shared
+    @ObservedObject private var router = Router.shared
     @State private var text = ""
     @State private var photo: PhotosPickerItem?
     @State private var showPhotos = false
@@ -269,7 +270,8 @@ struct NeoView: View {
                     Button { showFiles = true } label: { Label("Fil", systemImage: "doc") }
                 } label: {
                     Image(systemName: "plus").font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.ink)
-                        .frame(width: 40, height: 40).background(Theme.raised, in: Circle())
+                        .accessibilityLabel("Vedhæft billede eller fil")
+                        .frame(width: 44, height: 44).background(Theme.raised, in: Circle())
                 }
                 HStack(alignment: .bottom, spacing: 4) {
                     TextField("Skriv til Neo", text: $text, axis: .vertical)
@@ -278,7 +280,8 @@ struct NeoView: View {
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && m.files.isEmpty {
                         Button { Task { await toggleDictation() } } label: {
                             Image(systemName: dict.listening ? "stop.fill" : "mic").font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(dict.listening ? Theme.bad : Theme.sec).frame(width: 36, height: 40)
+                                .accessibilityLabel(dict.listening ? "Stop diktat" : "Diktér")
+                                .foregroundStyle(dict.listening ? Theme.bad : Theme.sec).frame(width: 44, height: 44)
                         }
                     } else {
                         Button {
@@ -288,7 +291,7 @@ struct NeoView: View {
                             Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.onAccent)
                                 .frame(width: 32, height: 32).background(m.busy ? Theme.dim : Theme.accent, in: Circle())
                         }
-                        .disabled(m.busy).padding(4)
+                        .disabled(m.busy).padding(6).accessibilityLabel("Send til Neo")
                     }
                 }
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -298,6 +301,14 @@ struct NeoView: View {
         }
         .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1)
         .background(.bar)
+        .onAppear(perform: takeDraft)
+        .onChange(of: router.neoDraft) { _, _ in takeDraft() }
+    }
+
+    /// Opened with context ("Spørg Neo om denne mail"): the question starts in the field.
+    private func takeDraft() {
+        guard let d = router.neoDraft else { return }
+        text = d; router.neoDraft = nil; focused = true
     }
 
     private func pick(_ c: JSON) {

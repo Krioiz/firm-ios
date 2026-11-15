@@ -54,167 +54,6 @@ struct ItemDetail: View {
     }
 }
 
-// MARK: - I dag
-// Mercury pattern: a label, one big number ("venter på dig"), a meta line, one black pill when
-// something waits, then a short "Venter på dig" list, deadlines and the morning brief.
-struct TodayView: View {
-    @ObservedObject private var store = Store.shared
-    @ObservedObject private var api = API.shared
-    @State private var briefOpen = false
-
-    private var open: [JSON] { store.alle.filter { !["completed", "cancelled"].contains($0["gruppe"].text) } }
-    private var mine: [JSON] {
-        open.filter { $0["ansvarlig"].text == "Marco" }.sorted { ($0["frist"].string ?? "9") < ($1["frist"].string ?? "9") }.prefix(5).map { $0 }
-    }
-    private var waiting: Int { store.decisions.count + store.mailOpen }
-    private var firstName: String { api.name.split(separator: " ").first.map(String.init) ?? "Marco" }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Hej, \(firstName)").font(Theme.title).foregroundStyle(Theme.ink)
-                        Text(Date().formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Locale(identifier: "da_DK"))).capitalizedFirst)
-                            .font(Theme.small).foregroundStyle(Theme.sec)
-                    }
-                    .padding(.bottom, Theme.s4)
-
-                    if let e = store.error { ErrorLine(text: e).padding(.bottom, Theme.s2) }
-                    if store.overblik["pause"]["pause"].bool {
-                        Banner(title: "Alle agenter er på pause.", text: "Ingen opgaver tages, før du genoptager dem under Agenter.", tone: .warn)
-                            .padding(.bottom, Theme.s2)
-                    }
-
-                    hero
-
-                    let fejl = store.overblik["fejl"].array
-                    if !fejl.isEmpty {
-                        SectionHead(title: "Fejl hos agenter")
-                        Rows {
-                            ForEach(fejl.map { $0.text }, id: \.self) { f in
-                                HStack(spacing: Theme.s1) { Dot(tone: .bad); Text(clean(f)).font(Theme.small).foregroundStyle(Theme.ink) }
-                            }
-                        }
-                    }
-
-                    SectionHead(title: "Venter på dig", link: store.decisions.isEmpty ? nil : "Se alle") { Router.shared.tab = .beslut }
-                    if !store.loaded { SkeletonRows(count: 3) }
-                    else if store.decisions.isEmpty && store.mailOpen == 0 {
-                        Rows { HStack(spacing: Theme.s1) { Dot(tone: .ok); Text("Intet venter på dig. Agenterne har resten.").font(Theme.small).foregroundStyle(Theme.sec) } }
-                    } else {
-                        Rows {
-                            if store.mailOpen > 0 {
-                                Button { Router.shared.tab = .mail } label: {
-                                    HStack(spacing: Theme.s2) {
-                                        ZStack { RoundedRectangle(cornerRadius: 9).fill(Theme.raised); Image(systemName: "tray").foregroundStyle(Theme.sec) }.frame(width: 32, height: 32)
-                                        Text(store.mailOpen == 1 ? "1 mail venter på svar" : "\(store.mailOpen) mails venter på svar").font(Theme.rowTitle).foregroundStyle(Theme.ink)
-                                        Spacer(); Dot(tone: .warn)
-                                    }
-                                }.buttonStyle(Press())
-                            }
-                            ForEach(store.decisions.prefix(4).map { $0 }, id: \.self) { c in
-                                NavigationLink { DecisionDetail(c: c) } label: { ItemRow(c: c) }.buttonStyle(Press())
-                            }
-                        }
-                    }
-
-                    SectionHead(title: "Frister", link: nil)
-                    if !store.loaded { SkeletonRows(count: 2) }
-                    else if store.overblik["frister"].array.isEmpty {
-                        Rows { Text("Ingen frister de næste 14 dage.").font(Theme.small).foregroundStyle(Theme.sec) }
-                    } else {
-                        Rows {
-                            ForEach(store.overblik["frister"].array.prefix(6).map { $0 }, id: \.self) { c in
-                                NavigationLink { ItemDetail(c: c) } label: { ItemRow(c: c) }.buttonStyle(Press())
-                            }
-                        }
-                    }
-
-                    SectionHead(title: "Morgenbrief")
-                    VStack(alignment: .leading, spacing: Theme.s1) {
-                        Text(clean(store.overblik["brief"].string.flatMap { $0.isEmpty ? nil : $0 } ?? "Kommer kl. 07."))
-                            .font(Theme.small).foregroundStyle(Theme.ink).lineSpacing(3)
-                            .lineLimit(briefOpen ? nil : 5).textSelection(.enabled)
-                        if (store.overblik["brief"].string ?? "").count > 220 {
-                            Button(briefOpen ? "Vis mindre" : "Vis mere") { withAnimation(.easeOut(duration: 0.2)) { briefOpen.toggle() } }
-                                .font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec).buttonStyle(.plain)
-                        }
-                    }
-                    .card()
-
-                    let oek = store.overblik["oekonomi"].string ?? "", salg = store.overblik["salg"].string ?? ""
-                    if !oek.isEmpty || !salg.isEmpty {
-                        SectionHead(title: "Penge og salg")
-                        Rows {
-                            if !oek.isEmpty {
-                                NavigationLink { EconomyView() } label: {
-                                    HStack { Text(clean(oek)).font(Theme.small).foregroundStyle(Theme.ink).multilineTextAlignment(.leading); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.dim) }
-                                }.buttonStyle(Press())
-                            }
-                            if !salg.isEmpty { Text(clean(salg)).font(Theme.small).foregroundStyle(Theme.ink) }
-                        }
-                    }
-
-                    if !mine.isEmpty {
-                        SectionHead(title: "Tildelt dig")
-                        Rows {
-                            ForEach(mine, id: \.self) { c in
-                                NavigationLink { ItemDetail(c: c) } label: { ItemRow(c: c) }.buttonStyle(Press())
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, Theme.s3).padding(.top, Theme.s1).padding(.bottom, Theme.s4)
-            }
-            .screen()
-            .refreshable { await store.load() }
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-
-    private var hero: some View {
-        VStack(alignment: .leading, spacing: Theme.s1) {
-            Text("Venter på dig").font(Theme.sans(13, .medium)).foregroundStyle(Theme.sec)
-            Text(store.loaded ? "\(waiting)" : "0")
-                .font(Theme.hero).monospacedDigit().foregroundStyle(Theme.ink)
-                .contentTransition(.numericText()).redacted(reason: store.loaded ? [] : .placeholder)
-            Text(heroMeta).font(Theme.small).foregroundStyle(Theme.sec)
-            HStack(spacing: Theme.s4) {
-                stat("Frister 14 dage", "\(store.overblik["frister"].array.count)")
-                stat("Åbne opgaver", "\(open.count)")
-                stat("AI 30 dage", "$" + daNumber(store.overblik["ai"]["brugt"].double) + " af $" + daNumber(store.overblik["ai"]["loft"].double))
-            }
-            .padding(.top, Theme.s2)
-            if !store.decisions.isEmpty {
-                Button { Haptic.tap(); Router.shared.tab = .beslut } label: {
-                    Text("Tag den næste beslutning  →")
-                }
-                .buttonStyle(.primary).padding(.top, Theme.s3)
-            } else if store.mailOpen > 0 {
-                Button { Haptic.tap(); Router.shared.tab = .mail } label: { Text("Svar på mailen  →") }
-                    .buttonStyle(.primary).padding(.top, Theme.s3)
-            }
-        }
-        .card(Theme.s4)
-        .animation(.easeOut(duration: 0.3), value: waiting)
-    }
-
-    private var heroMeta: String {
-        let d = store.decisions.count, m = store.mailOpen
-        if d == 0 && m == 0 { return "Alt er klaret." }
-        return [d > 0 ? (d == 1 ? "1 beslutning" : "\(d) beslutninger") : nil, m > 0 ? (m == 1 ? "1 mail" : "\(m) mails") : nil]
-            .compactMap { $0 }.joined(separator: " · ")
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(Theme.mono(15, .medium)).foregroundStyle(Theme.ink).lineLimit(1).minimumScaleFactor(0.7)
-            Text(label).font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(1)
-        }
-    }
-}
-
 extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
@@ -257,28 +96,28 @@ func excerpt(_ c: JSON) -> String {
     return clean(lines.prefix(3).joined(separator: " "))
 }
 
+/// Approve or reject: runs after 5 seconds, with "Fortryd" in the meantime.
 @MainActor func decide(_ c: JSON, _ handling: String, tekst: String? = nil) {
     let id = c["id"].text
-    withAnimation(.easeOut(duration: 0.25)) { Store.shared.drop(id) }
-    if handling == "godkend" { Haptic.approve(); Toast.shared.show("Godkendt") } else { Haptic.reject(); Toast.shared.show("Afvist") }
-    Task {
-        var b: [String: Any] = ["handling": handling]
-        if let tekst { b["tekst"] = tekst }
-        do { try await API.shared.send("api/beslut/\(id)", b) } catch { Haptic.fail(); Toast.shared.show("Det gik ikke. \(error.localizedDescription)") }
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        await Store.shared.load()
+    var b: [String: Any] = ["handling": handling]
+    if let tekst { b["tekst"] = tekst }
+    let body = b
+    Pending.shared.later("d\(id)", handling == "godkend" ? "Godkendt" : "Afvist", reject: handling != "godkend") {
+        _ = try await API.shared.send("api/beslut/\(id)", body)
     }
 }
 
 struct DecisionsView: View {
     @ObservedObject private var store = Store.shared
+    @ObservedObject private var pending = Pending.shared
     @State private var answering: JSON?
     @State private var opened: JSON?
 
     private struct DGroup: Identifiable { let id: String; let items: [JSON] }
     private var grouped: [DGroup] {
-        var out = decisionGroups.map { g in DGroup(id: g.0, items: store.decisions.filter { matches(g.1, $0["navn"].text) }) }
-        out.append(DGroup(id: "Andre", items: store.decisions.filter { c in !decisionGroups.contains { matches($0.1, c["navn"].text) } }))
+        let open = store.decisions.filter { !pending.hidden.contains("d\($0["id"].text)") }
+        var out = decisionGroups.map { g in DGroup(id: g.0, items: open.filter { matches(g.1, $0["navn"].text) }) }
+        out.append(DGroup(id: "Andre", items: open.filter { c in !decisionGroups.contains { matches($0.1, c["navn"].text) } }))
         return out.filter { !$0.items.isEmpty }
     }
 

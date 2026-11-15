@@ -5,6 +5,7 @@ import UIKit
 // deadline as a small pill, the draft on a clean sheet, and Send / Ret og send / Afvis. Sending
 // always asks first, as on the web.
 @MainActor final class MailModel: ObservableObject {
+    static let shared = MailModel()
     @Published var data: JSON = .null
     @Published var error: String?
     @Published var loaded = false
@@ -57,8 +58,9 @@ struct CountdownPill: View {
 }
 
 struct MailView: View {
-    @StateObject private var m = MailModel()
+    @ObservedObject private var m = MailModel.shared
     @ObservedObject private var router = Router.shared
+    @ObservedObject private var pending = Pending.shared
     @State private var showDone = false
 
     var body: some View {
@@ -66,8 +68,8 @@ struct MailView: View {
             List {
                 if let e = m.error { ErrorLine(text: e).plainRow() }
                 if m.data["indstillinger"]["stop"].bool || m.data["pause"].bool {
-                    Banner(title: m.data["pause"].bool ? "Alle agenter er på pause." : "Svarvagt er stoppet.",
-                           text: "Ingen nye svarudkast eller autosvar, før den kører igen.", tone: .warn).plainRow()
+                    Banner(title: m.data["pause"].bool ? "Alle agenter er på pause." : "Mailudkast er sat på pause.",
+                           text: "Der laves ingen nye svarudkast eller autosvar, før det kører igen.", tone: .warn).plainRow()
                 }
                 if !m.loaded {
                     SkeletonRows(count: 3).plainRow()
@@ -75,10 +77,10 @@ struct MailView: View {
                     EmptyState(icon: "tray", title: "Alt er besvaret",
                                text: "Når en ny mail til marco@ eller kontakt@ kommer, står den her med et svarudkast.").plainRow()
                 } else {
-                    Section { ForEach(m.open, id: \.self) { mail in row(mail, countdown: true) } } header: { head("Venter på svar", m.open.count) }
+                    Section { ForEach(m.open.filter { !pending.hidden.contains("m\($0["id"].text)") }, id: \.self) { mail in row(mail, countdown: true) } } header: { head("Venter på svar", m.open.count) }
                 }
                 if !m.dry.isEmpty {
-                    Section { ForEach(m.dry, id: \.self) { mail in row(mail, countdown: false) } } header: { head("Tørløb", m.dry.count) }
+                    Section { ForEach(m.dry, id: \.self) { mail in row(mail, countdown: false) } } header: { head("Kun udkast, sendes ikke af sig selv", m.dry.count) }
                 }
                 if !m.done.isEmpty {
                     Section {
@@ -174,6 +176,17 @@ struct MailDetail: View {
     private var id: Int { mail["id"].int ?? 0 }
     private var waiting: Bool { ["venter", "toerloeb"].contains(mail["status"].text) }
     private var sender: String { mail["fra_navn"].string.flatMap { $0.isEmpty ? nil : $0 } ?? mail["fra"].text }
+    private var firstName: String { sender.split(separator: " ").first.map(String.init) ?? sender }
+
+    /// Rejecting sends nothing, so it needs no question: it runs after 5 seconds with "Fortryd".
+    private func reject() {
+        let mid = id
+        Pending.shared.later("m\(mid)", "Mailen er afvist. Intet sendes", reject: true) {
+            _ = try await API.shared.send("api/svarvagt/\(mid)/afvis")
+            await MailModel.shared.load()
+        }
+        dismiss()
+    }
 
     var body: some View {
         ScrollView {
@@ -190,9 +203,13 @@ struct MailDetail: View {
         .safeAreaInset(edge: .bottom) {
             if waiting {
                 HStack(spacing: Theme.s1) {
-                    Button { confirmSend = true } label: { Text("Send") }.buttonStyle(.primary)
-                    Button { Task { await startEdit() } } label: { Text("Ret og send") }.buttonStyle(.secondary)
-                    Button { confirmReject = true } label: { Text("Afvis") }.buttonStyle(.danger)
+                    Button { confirmSend = true } label: { Text("Send svar til \(firstName)") }.buttonStyle(.primary)
+                    Button { Task { await startEdit() } } label: { Text("Ret") }.buttonStyle(PillButton(kind: .secondary, full: false))
+                    Button { reject() } label: { Text("Afvis") }.buttonStyle(PillButton(kind: .danger, full: false))
+                    Button { Router.shared.askNeo("Om mailen fra \(firstName) med emnet \"\(clean(mail["emne"].text))\": ") } label: {
+                        Image(systemName: "waveform").frame(minWidth: 20)
+                    }
+                    .buttonStyle(PillButton(kind: .secondary, full: false)).accessibilityLabel("Spørg Neo om denne mail")
                 }
                 .disabled(busy)
                 .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2).background(.bar)
@@ -202,12 +219,7 @@ struct MailDetail: View {
             Button("Send") { Task { await send(nil) } }
             Button("Annullér", role: .cancel) {}
         }
-        .confirmationDialog("Afvis mailen?", isPresented: $confirmReject, titleVisibility: .visible) {
-            Button("Afvis", role: .destructive) {
-                Task { busy = true; if await m.act("api/svarvagt/\(id)/afvis", [:], ok: "Mailen er afvist", reject: true) { dismiss() }; busy = false }
-            }
-            Button("Annullér", role: .cancel) {}
-        } message: { Text("Intet sendes, og opgaven lukkes.") }
+
         .sheet(isPresented: $editing) {
             EditDraftSheet(to: mail["svar_til"].string ?? mail["fra"].text, subject: clean(mail["emne"].text), text: $draft) {
                 await send(draft)

@@ -112,7 +112,8 @@ struct KV: View {
 // og bogfør; dinero_kladde (not test) -> Godkend og bogfør; Afvis while still open. Every booking
 // action asks first, with the web page's own wording.
 struct BilagView: View {
-    @StateObject private var l = Loader("api/bilag")
+    var only: String? = nil
+    @ObservedObject private var l = Store.bilagLoader
     @State private var preview: URL?
     @State private var ask: (String, String, String, String, Bool)?   // question, path, toast, button, reject
 
@@ -123,12 +124,12 @@ struct BilagView: View {
                 if let linje = l.data["linje"].string, !linje.isEmpty { Text(clean(linje)).font(Theme.small).foregroundStyle(Theme.sec) }
                 if l.data["pause"].bool { Banner(title: "Agenterne er på pause.", text: "Nye bilag læses ikke, før de kører igen.", tone: .warn) }
                 if !l.loaded { SkeletonRows(count: 3) }
-                else if l.data["aabne"].array.isEmpty {
+                else if shown.isEmpty {
                     EmptyState(icon: "doc.text", title: "Ingen bilag venter", text: "Når et købsbilag fanges fra mail eller uploades, står det her til godkendelse.")
                 } else {
-                    ForEach(l.data["aabne"].array, id: \.self) { b in card(b) }
+                    ForEach(shown, id: \.self) { b in card(b) }
                 }
-                if !l.data["seneste"].array.isEmpty {
+                if only == nil && !l.data["seneste"].array.isEmpty {
                     SectionHead(title: "Seneste")
                     Rows {
                         ForEach(l.data["seneste"].array.prefix(12).map { $0 }, id: \.self) { b in
@@ -145,7 +146,7 @@ struct BilagView: View {
             .padding(Theme.s3)
         }
         .screen()
-        .navigationTitle("Bilag")
+        .navigationTitle(only == nil ? "Bilag" : "Bilag")
         .task { await l.load() }
         .refreshable { await l.load() }
         .quickLookPreview($preview)
@@ -194,14 +195,14 @@ struct BilagView: View {
                     Button { Task { await open(id) } } label: { Image(systemName: "doc.viewfinder") }.buttonStyle(PillButton(kind: .secondary, full: false))
                 }
                 if st == "kladde" {
-                    Button("Opret kladde") {
+                    Button("Opret kladde i Dinero") {
                         ask = ("Opret købsbilaget i Dinero som kladde med filen vedhæftet? Det bogføres ikke. Det gør du med Godkend.", "api/bilag/\(id)/dinero", "Kladden er oprettet i Dinero", "Opret kladde", false)
                     }.buttonStyle(.primary)
                 } else if st == "venter" {
-                    Button("Godkend og bogfør") { ask = (bookText, "api/bilag/\(id)/godkend", "Bilaget er bogført", "Godkend og bogfør", false) }.buttonStyle(.primary)
+                    Button("Bogfør i Dinero") { ask = (bookText, "api/bilag/\(id)/godkend", "Bilaget er bogført", "Bogfør i Dinero", false) }.buttonStyle(.primary)
                     Button("Stop") { Task { await l.act("api/bilag/\(id)/stop", ok: "Stoppet. Bilaget venter på dig.", reject: true) } }.buttonStyle(.secondary)
                 } else if st == "dinero_kladde" && !b["test"].bool {
-                    Button("Godkend og bogfør") { ask = (bookText, "api/bilag/\(id)/godkend", "Bilaget er bogført", "Godkend og bogfør", false) }.buttonStyle(.primary)
+                    Button("Bogfør i Dinero") { ask = (bookText, "api/bilag/\(id)/godkend", "Bilaget er bogført", "Bogfør i Dinero", false) }.buttonStyle(.primary)
                 }
                 if ["kladde", "dinero_kladde", "venter", "fejl"].contains(st) {
                     Button("Afvis") {
@@ -213,7 +214,12 @@ struct BilagView: View {
         .card()
     }
 
-    private var bookText: String { "Godkend og bogfør bilaget i Dinero? Betalt med privat kort i udenlandsk valuta: modposteringen \"Betalt med privat kort\" (60120) registreres bagefter." }
+    private var shown: [JSON] {
+        let all = l.data["aabne"].array + (only == nil ? [] : l.data["seneste"].array)
+        return only.map { id in all.filter { $0["id"].text == id } } ?? l.data["aabne"].array
+    }
+
+    private var bookText: String { "Bogfør bilaget i Dinero? Det kan ikke fortrydes herfra. Betalt med privat kort i udenlandsk valuta: modposteringen \"Betalt med privat kort\" (60120) registreres bagefter." }
 
     private func open(_ id: String) async {
         do {
@@ -329,7 +335,7 @@ struct AgentDetail: View {
                     Rows { ForEach(a["arbejder"].array, id: \.self) { c in NavigationLink { ItemDetail(c: c) } label: { ItemRow(c: c) }.buttonStyle(Press()) } }
                 }
                 if !a["jobs"].array.isEmpty {
-                    SectionHead(title: "Seneste job")
+                    SectionHead(title: "Seneste opgaver")
                     Rows {
                         ForEach(a["jobs"].array, id: \.self) { j in
                             VStack(alignment: .leading, spacing: 2) {

@@ -137,7 +137,7 @@ struct PillButton: ButtonStyle {
             .font(Theme.button)
             .lineLimit(1).minimumScaleFactor(0.85)
             .foregroundStyle(kind == .primary ? Theme.onAccent : kind == .danger ? Theme.bad : Theme.ink)
-            .frame(maxWidth: full ? .infinity : nil, minHeight: 40)
+            .frame(maxWidth: full ? .infinity : nil, minHeight: 44)
             .padding(.horizontal, Theme.s3)
             .background(kind == .primary ? Theme.accent : Theme.raised, in: Capsule())
             .scaleEffect(configuration.isPressed ? 0.98 : 1)

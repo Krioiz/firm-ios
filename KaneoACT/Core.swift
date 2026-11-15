@@ -4,6 +4,7 @@ import Security
 import CryptoKit
 import AuthenticationServices
 import UIKit
+import UserNotifications
 
 // MARK: - JSON
 // ACT's API is plain FastAPI dicts whose shape shifts as the web page grows. A dynamic value is
@@ -144,6 +145,7 @@ struct APIError: LocalizedError {
             r.httpMethod = "POST"; r.setValue("Bearer " + t, forHTTPHeaderField: "Authorization")
             _ = try? await URLSession.shared.data(for: r)
         }
+        UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
         forget()
     }
 
@@ -285,15 +287,20 @@ final class WebLogin: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
 }
 
-// MARK: - Toast
+// MARK: - Toast (with an optional "Fortryd")
 @MainActor final class Toast: ObservableObject {
     static let shared = Toast()
     @Published var text: String?
+    @Published var undo: (() -> Void)?
     private var task: Task<Void, Never>?
-    func show(_ t: String) {
-        text = t; task?.cancel()
-        task = Task { try? await Task.sleep(nanoseconds: 2_200_000_000); if !Task.isCancelled { text = nil } }
+    func show(_ t: String, undo: (() -> Void)? = nil, seconds: Double = 2.2) {
+        text = t; self.undo = undo; task?.cancel()
+        task = Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if !Task.isCancelled { text = nil; self.undo = nil }
+        }
     }
+    func dismiss() { task?.cancel(); text = nil; undo = nil }
 }
 
 // MARK: - Brands
