@@ -167,7 +167,11 @@ struct NeoView: View {
                     Button { Task { await m.open(nil) } } label: { Image(systemName: "square.and.pencil") }
                 }
             }
-            .task { await m.loadThreads(); if m.msgs.isEmpty, let t = m.traad { await m.open(t) } }
+            .task {
+                await m.loadThreads()
+                if router.neoThread != nil { await takeThread() } else if m.msgs.isEmpty, let t = m.traad { await m.open(t) }
+            }
+            .onChange(of: router.neoThread) { _, t in if t != nil { Task { await takeThread() } } }
             .onChange(of: m.mode) { _, v in UserDefaults.standard.set(v, forKey: "neo.mode") }
             .photosPicker(isPresented: $showPhotos, selection: $photo, matching: .images)
             .onChange(of: photo) { _, item in
@@ -312,6 +316,14 @@ struct NeoView: View {
         text = d; router.neoDraft = nil; focused = true
     }
 
+    /// Opened from a push: show that thread (the SMS bridge writes in its own fixed Neo thread).
+    private func takeThread() async {
+        guard let t = router.neoThread else { return }
+        router.neoThread = nil
+        await m.open(t)
+        await m.loadThreads()
+    }
+
     private func pick(_ c: JSON) {
         if let r = text.range(of: "@[^\\s@]*$", options: .regularExpression) { text.replaceSubrange(r, with: "@\(kode(c)) ") }
         Haptic.tap(); focused = true
@@ -383,6 +395,30 @@ struct Bubble: View {
 struct ActionChip: View {
     let v: JSON
     var body: some View {
+        // "sms": the SMS bridge's link to the reply draft under Beslutninger. Tap opens the decision.
+        if v["type"].text == "sms", let id = v["id"].string, !id.isEmpty {
+            Button {
+                Haptic.tap()
+                Router.shared.tab = .beslut
+                Task { await Store.shared.load(); Router.shared.openDecision = id }
+            } label: {
+                HStack(spacing: Theme.s1) {
+                    Image(systemName: "message").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.accent)
+                    Text(clean(v["navn"].text)).font(Theme.small).foregroundStyle(Theme.ink).lineLimit(2).multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.dim)
+                }
+                .frame(minHeight: 44)
+                .padding(.horizontal, Theme.s2)
+                .background(Theme.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(Press())
+            .accessibilityHint("Åbner svarudkastet under Beslutninger")
+        } else { chip }
+    }
+
+    @ViewBuilder private var chip: some View {
         let type = v["type"].text
         let title = [kode(v), clean(v["navn"].text)].filter { !$0.isEmpty }.joined(separator: " ")
         HStack(spacing: Theme.s1) {

@@ -85,7 +85,7 @@ struct WaitItem: Identifiable {
     var primary: String? {
         switch kind {
         case .mail: return "Send svar til \(firstName)"
-        case .beslutning: return "Godkend"
+        case .beslutning: return isCodeDecision(json) ? "Skriv koden" : "Godkend"
         case .bilag:
             switch bilagStatus {
             case "kladde": return "Opret kladde i Dinero"
@@ -101,7 +101,7 @@ struct WaitItem: Identifiable {
         guard primary != nil else { return nil }
         switch kind {
         case .mail: return "Send"
-        case .beslutning: return "Godkend"
+        case .beslutning: return isCodeDecision(json) ? "Skriv koden" : "Godkend"
         case .bilag: return bilagStatus == "kladde" ? "Opret kladde" : "Bogfør"
         case .frist: return "Færdig"
         }
@@ -337,6 +337,7 @@ struct ToDigView: View {
 
     private func run(_ it: WaitItem) {
         if it.primary == nil { return }
+        if it.kind == .beslutning && isCodeDecision(it.json) { answer = it.json; return }
         if it.primaryNeedsConfirm { confirm = it } else { Task { await Act.primary(it) } }
     }
 }

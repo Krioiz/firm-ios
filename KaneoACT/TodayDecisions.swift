@@ -85,6 +85,7 @@ func recommendation(_ c: JSON) -> String {
     if starts("^FB-gruppe") { return "Godkend, hvis Kaneo skal være aktiv i gruppen efter dens regler. Afvis ellers." }
     if starts("^Mail:") { return "Læs mailen. Godkend, hvis den skal følges op; afvis, hvis den kan lægges væk." }
     if starts("^Legat/pulje") { return "Godkend, hvis Kaneo skal søge. Afvis, hvis den ikke passer." }
+    if isCodeDecision(c) { return "Skriv koden fra 3's SMS. Den gives kun videre til hentningen og gemmes ikke." }
     return "Godkend eller afvis."
 }
 
@@ -94,6 +95,12 @@ func excerpt(_ c: JSON) -> String {
         .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("anbefal") }
         .map { $0.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "#", with: "").trimmingCharacters(in: .whitespaces) }
     return clean(lines.prefix(3).joined(separator: " "))
+}
+
+/// "Beslutning: Skriv koden fra 3" (label mit3-kode): the answer is a one-time code of 4-8 digits,
+/// sent to /api/beslut/{id}/svar. The server passes it on to the Mit 3 fetch and never stores it.
+func isCodeDecision(_ c: JSON) -> Bool {
+    c["labels"].array.contains { $0.text == "mit3-kode" } || c["navn"].text.range(of: "^Beslutning: Skriv koden fra 3", options: [.regularExpression, .caseInsensitive]) != nil
 }
 
 /// Approve or reject: runs after 5 seconds, with "Fortryd" in the meantime.
@@ -110,6 +117,7 @@ func excerpt(_ c: JSON) -> String {
 struct DecisionsView: View {
     @ObservedObject private var store = Store.shared
     @ObservedObject private var pending = Pending.shared
+    @ObservedObject private var router = Router.shared
     @State private var answering: JSON?
     @State private var opened: JSON?
 
@@ -137,7 +145,11 @@ struct DecisionsView: View {
                             DecisionCard(c: c, open: { opened = c }, answer: { answering = c })
                                 .plainRow()
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button { decide(c, "godkend") } label: { Label("Godkend", systemImage: "checkmark") }.tint(Theme.ok)
+                                    if isCodeDecision(c) {
+                                        Button { answering = c } label: { Label("Skriv koden", systemImage: "number") }.tint(Theme.ok)
+                                    } else {
+                                        Button { decide(c, "godkend") } label: { Label("Godkend", systemImage: "checkmark") }.tint(Theme.ok)
+                                    }
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) { decide(c, "afvis") } label: { Label("Afvis", systemImage: "xmark") }
@@ -163,7 +175,17 @@ struct DecisionsView: View {
             .sheet(item: Binding(get: { answering.map { Wrapped(json: $0) } }, set: { answering = $0?.json })) { w in
                 AnswerSheet(c: w.json)
             }
+            .onAppear(perform: openRequested)
+            .onChange(of: router.openDecision) { _, _ in openRequested() }
         }
+    }
+
+    /// Neo's SMS card asks for one decision; the store has been reloaded first, so a miss means it is already settled.
+    private func openRequested() {
+        guard let id = router.openDecision, store.loaded else { return }
+        router.openDecision = nil
+        if let c = store.decisions.first(where: { $0["id"].text == id }) { answering = nil; opened = c }
+        else { Toast.shared.show("Udkastet er allerede afgjort") }
     }
 }
 
@@ -203,8 +225,12 @@ struct DecisionCard: View {
             .onTapGesture(perform: open)
             // Explicit styles: in a List row, default-styled buttons all fire on any tap in the row.
             HStack(spacing: Theme.s1) {
-                Button { decide(c, "godkend") } label: { Text("Godkend") }.buttonStyle(.primary)
-                Button(action: answer) { Text("Svar") }.buttonStyle(.secondary)
+                if isCodeDecision(c) {
+                    Button(action: answer) { Text("Skriv koden") }.buttonStyle(.primary)
+                } else {
+                    Button { decide(c, "godkend") } label: { Text("Godkend") }.buttonStyle(.primary)
+                    Button(action: answer) { Text("Svar") }.buttonStyle(.secondary)
+                }
                 Button { decide(c, "afvis") } label: { Text("Afvis") }.buttonStyle(.danger)
             }
         }
@@ -230,12 +256,16 @@ struct DecisionDetail: View {
                 }
                 Text(clean(c["navn"].text)).font(Theme.title).foregroundStyle(Theme.ink)
                 Banner(title: "Anbefaling.", text: recommendation(c))
+                if isCodeDecision(c) {
+                    Text(clean(c["tekst"].text)).font(Theme.body).foregroundStyle(Theme.sec).lineSpacing(3)
+                } else {
                 VStack(alignment: .leading, spacing: Theme.s1) {
                     Text("Teksten").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.sec)
                     Text("Ret den her, før du godkender, hvis noget skal ændres.").font(Theme.meta).foregroundStyle(Theme.dim)
                     TextEditor(text: $text).font(Theme.body).lineSpacing(3).frame(minHeight: 280).scrollContentBackground(.hidden)
                         .padding(Theme.s2).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line))
+                }
                 }
             }
             .padding(Theme.s3)
@@ -244,8 +274,12 @@ struct DecisionDetail: View {
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: Theme.s1) {
-                Button { decide(c, "godkend", tekst: text != c["tekst"].text ? text : nil); dismiss() } label: { Text("Godkend") }.buttonStyle(.primary)
-                Button { answering = true } label: { Text("Svar") }.buttonStyle(.secondary)
+                if isCodeDecision(c) {
+                    Button { answering = true } label: { Text("Skriv koden") }.buttonStyle(.primary)
+                } else {
+                    Button { decide(c, "godkend", tekst: text != c["tekst"].text ? text : nil); dismiss() } label: { Text("Godkend") }.buttonStyle(.primary)
+                    Button { answering = true } label: { Text("Svar") }.buttonStyle(.secondary)
+                }
                 Button { decide(c, "afvis"); dismiss() } label: { Text("Afvis") }.buttonStyle(.danger)
             }
             .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s2).background(.bar)
@@ -265,6 +299,9 @@ struct AnswerSheet: View {
     @State private var error: String?
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
+    private var code: Bool { isCodeDecision(c) }
+    private var digits: String { svar.filter(\.isNumber) }
+    private var canSave: Bool { code ? (4...8).contains(digits.count) : !svar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var jura: Bool { (c["navn"].text + " " + c["labels"].array.map { $0.text }.joined(separator: " ")).range(of: "advokat|\\bjura\\b|juridisk|gdpr|retssag", options: [.regularExpression, .caseInsensitive]) != nil }
 
     var body: some View {
@@ -275,6 +312,16 @@ struct AnswerSheet: View {
                         BrandIcon(item: c, size: 36)
                         Text(clean(c["navn"].text)).font(Theme.rowTitle).foregroundStyle(Theme.ink).lineLimit(2)
                     }
+                    if code {
+                        TextField("Kode", text: $svar).font(Theme.mono(28)).multilineTextAlignment(.center)
+                            .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($focused)
+                            .onChange(of: svar) { _, v in let d = String(v.filter(\.isNumber).prefix(8)); if d != v { svar = d } }
+                            .padding(Theme.s2).frame(minHeight: 56)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line))
+                            .accessibilityLabel("Koden fra 3")
+                        Text("4-8 cifre. Koden gives kun videre til hentningen og gemmes ikke.").font(Theme.meta).foregroundStyle(Theme.dim)
+                    } else {
                     TextEditor(text: $svar).font(Theme.body).focused($focused).frame(minHeight: 200).scrollContentBackground(.hidden)
                         .padding(Theme.s2).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line))
@@ -288,18 +335,19 @@ struct AnswerSheet: View {
                         }
                     }
                     .tint(Theme.ok)
-                    if jura { Banner(title: "Juraspørgsmål.", text: "I hjernen står kun \"besvaret, se opgaven\".") }
+                    }
+                    if jura && !code { Banner(title: "Juraspørgsmål.", text: "I hjernen står kun \"besvaret, se opgaven\".") }
                     if let error { ErrorLine(text: error) }
                 }
                 .padding(Theme.s3)
             }
             .screen()
-            .navigationTitle("Svar til \(c["ansvarlig"].string ?? "agenten")").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(code ? "Koden fra 3" : "Svar til \(c["ansvarlig"].string ?? "agenten")").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Annullér") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Gem svar") { Task { await save() } }.font(Theme.button)
-                        .disabled(busy || svar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button(code ? "Send koden" : "Gem svar") { Task { await save() } }.font(Theme.button)
+                        .disabled(busy || !canSave)
                 }
             }
             .onAppear { focused = true }
@@ -310,9 +358,9 @@ struct AnswerSheet: View {
     private func save() async {
         busy = true; error = nil
         do {
-            try await API.shared.send("api/beslut/\(c["id"].text)/svar", ["svar": svar, "privat": privat])
+            try await API.shared.send("api/beslut/\(c["id"].text)/svar", ["svar": code ? digits : svar, "privat": code || privat])
             withAnimation { Store.shared.drop(c["id"].text) }
-            Haptic.approve(); Toast.shared.show("Svaret er gemt hos \(kode(c))")
+            Haptic.approve(); Toast.shared.show(code ? "Koden er givet videre" : "Svaret er gemt hos \(kode(c))")
             dismiss(); after()
             Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await Store.shared.load() }
         } catch { Haptic.fail(); self.error = error.localizedDescription }

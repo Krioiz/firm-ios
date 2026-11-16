@@ -24,6 +24,10 @@ enum Tab: Hashable { case idag, beslut, mail, neo, mere }
     /// A quick action's sheet or question, shown on "Til dig".
     @Published var sheet: QuickSheet?
     @Published var ask: QuickAsk?
+    /// A Neo thread to open (a tapped "neo" push carries it as userInfo["traad"]).
+    @Published var neoThread: String?
+    /// A decision to open on Beslutninger (an SMS card in Neo links to its draft).
+    @Published var openDecision: String?
     func changed() { stamp += 1 }
     func askNeo(_ draft: String?) {
         if let draft { neoDraft = draft }
@@ -93,9 +97,17 @@ final class Push: NSObject, UIApplicationDelegate, UNUserNotificationCenterDeleg
 
     func userNotificationCenter(_ c: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler h: @escaping () -> Void) {
-        let type = response.notification.request.content.userInfo["type"] as? String ?? ""
+        let info = response.notification.request.content.userInfo
+        let type = info["type"] as? String ?? ""
+        let traad = info["traad"] as? String
         Task { @MainActor in
-            Router.shared.tab = ["mail", "mail3", "autosvar"].contains(type) ? .mail : type == "beslutning" ? .beslut : .idag
+            if type == "neo" {
+                // Neo's SMS notice: open the thread it was written in, not "Til dig".
+                if let traad, !traad.isEmpty { Router.shared.neoThread = traad }
+                Router.shared.tab = .neo
+            } else {
+                Router.shared.tab = ["mail", "mail3", "autosvar"].contains(type) ? .mail : type == "beslutning" ? .beslut : .idag
+            }
             Router.shared.changed()
         }
         h()
