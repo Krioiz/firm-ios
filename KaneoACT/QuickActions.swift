@@ -6,11 +6,12 @@ import UniformTypeIdentifiers
 // directly (no pages in between) on ACT's existing API. Long press and drag to reorder; the order
 // is remembered on the phone. The same actions back the home-screen shortcuts.
 enum QuickAction: String, CaseIterable, Identifiable {
-    case neo, opgave, scan, bogfoer, faktura, kontrakt, mails, dikter, leads, pause
+    case neo, runde, opgave, scan, bogfoer, faktura, kontrakt, mails, dikter, leads, pause
     var id: String { rawValue }
     var title: String {
         switch self {
         case .neo: return "Neo"
+        case .runde: return "Runde"
         case .opgave: return "Opgave"
         case .scan: return "Kvittering"
         case .bogfoer: return "Bogfør"
@@ -26,6 +27,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
     var spoken: String {
         switch self {
         case .neo: return "Spørg Neo"
+        case .runde: return "Godkendelsesrunden"
         case .opgave: return "Ny opgave"
         case .scan: return "Scan kvittering"
         case .bogfoer: return "Bogfør fakturaer"
@@ -40,6 +42,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .neo: return "waveform"
+        case .runde: return "rectangle.stack"
         case .opgave: return "plus"
         case .scan: return "camera"
         case .bogfoer: return "tray.and.arrow.down"
@@ -53,7 +56,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
     }
 }
 
-enum QuickSheet: String, Identifiable { case opgave, scan, faktura, kontrakt, dikter; var id: String { rawValue } }
+enum QuickSheet: String, Identifiable { case opgave, scan, faktura, kontrakt, dikter, runde; var id: String { rawValue } }
 enum QuickAsk: String, Identifiable { case leads, pause; var id: String { rawValue } }
 
 /// Runs a quick action: a tab switch, Neo with a starting text, or a sheet on "Til dig".
@@ -63,6 +66,7 @@ enum QuickAsk: String, Identifiable { case leads, pause; var id: String { rawVal
         let r = Router.shared
         switch a {
         case .neo: r.askNeo(nil)
+        case .runde: r.tab = .idag; r.sheet = .runde
         case .bogfoer: r.askNeo("Find og bogfør fakturaer fra ")
         case .mails: r.tab = .mail
         case .opgave: r.tab = .idag; r.sheet = .opgave
@@ -78,6 +82,7 @@ enum QuickAsk: String, Identifiable { case leads, pause; var id: String { rawVal
     static func shortcut(_ type: String) {
         switch type {
         case "neo": run(.neo)
+        case "runde": run(.runde)
         case "scan": run(.scan)
         case "opgave": run(.opgave)
         default: Router.shared.tab = .idag
@@ -93,7 +98,10 @@ struct QuickGrid: View {
 
     private var order: [QuickAction] {
         var o = stored.split(separator: ",").compactMap { QuickAction(rawValue: String($0)) }
-        for a in QuickAction.allCases where !o.contains(a) { o.append(a) }
+        for a in QuickAction.allCases where !o.contains(a) {
+            // Runde is new: it goes right after Neo, not at the far end of a stored order.
+            if a == .runde { o.insert(a, at: min(1, o.count)) } else { o.append(a) }
+        }
         return o
     }
     private var paused: Bool { store.overblik["pause"]["pause"].bool }
@@ -148,6 +156,7 @@ struct CirclePress: ButtonStyle {
 struct QuickCircle: View {
     let a: QuickAction
     let paused: Bool
+    @ObservedObject private var runde = RundeModel.shared
     var body: some View {
         let neo = a == .neo
         VStack(spacing: Theme.s1) {
@@ -167,6 +176,15 @@ struct QuickCircle: View {
                 }
             }
             .frame(width: 58, height: 58)
+            .overlay(alignment: .topTrailing) {
+                if a == .runde && runde.antal > 0 {
+                    Text("\(runde.antal)").font(Theme.mono(11, .semibold)).monospacedDigit().foregroundStyle(.white)
+                        .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
+                        .background(Theme.tile, in: Capsule())
+                        .offset(x: 4, y: -2)
+                        .accessibilityLabel("\(runde.antal) udkast venter")
+                }
+            }
             Text(a == .pause && paused ? "Genoptag" : a.title)
                 .font(Theme.sans(11, .medium)).foregroundStyle(Theme.sec)
                 .lineLimit(1).minimumScaleFactor(0.8)

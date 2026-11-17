@@ -560,6 +560,7 @@ struct QuickDialogs: ViewModifier {
                 case .faktura: NewInvoiceSheet()
                 case .kontrakt: NewContractSheet()
                 case .scan: ScanReceipt().ignoresSafeArea()
+                case .runde: RundeView()
                 }
             }
             .confirmationDialog(router.ask == .leads ? "Find nye leads nu?" : (paused ? "Genoptag alle agenter?" : "Sæt alle agenter på pause?"),

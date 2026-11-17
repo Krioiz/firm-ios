@@ -101,7 +101,11 @@ final class Push: NSObject, UIApplicationDelegate, UNUserNotificationCenterDeleg
         let type = info["type"] as? String ?? ""
         let traad = info["traad"] as? String
         Task { @MainActor in
-            if type == "neo" {
+            if type == "runde" {
+                // The 08:00 push "X udkast venter": open the deck straight away.
+                Router.shared.tab = .idag
+                Router.shared.sheet = .runde
+            } else if type == "neo" {
                 // Neo's SMS notice: open the thread it was written in, not "Til dig".
                 if let traad, !traad.isEmpty { Router.shared.neoThread = traad }
                 Router.shared.tab = .neo
@@ -295,7 +299,8 @@ struct MainTabs: View {
         async let m: () = MailModel.shared.load()
         async let b: () = Store.bilagLoader.load()
         async let t: () = loadToday()
-        _ = await (m, b, t)
+        async let r: () = RundeModel.shared.load()
+        _ = await (m, b, t, r)
         do {
             async let o = API.shared.get("api/overblik")
             async let a = API.shared.get("api/alle")
