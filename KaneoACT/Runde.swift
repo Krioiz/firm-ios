@@ -62,7 +62,7 @@ import SwiftUI
 }
 
 /// A choice waiting for the one extra "Send" tap.
-private struct Pending: Identifiable {
+struct RundePending: Identifiable {
     let c: JSON
     let valg: String
     let tekst: String?
@@ -74,7 +74,7 @@ struct RundeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var drag: CGSize = .zero
     @State private var editing: Wrapped?
-    @State private var pending: Pending?
+    @State private var pending: RundePending?
 
     var body: some View {
         NavigationStack {
@@ -188,7 +188,7 @@ struct RundeView: View {
     private func act(_ c: JSON, _ valg: String, tekst: String? = nil) {
         if (valg == "send" || valg == "ret") && c["sender"].bool && !m.confirmed {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { drag = .zero }
-            pending = Pending(c: c, valg: valg, tekst: tekst)
+            pending = RundePending(c: c, valg: valg, tekst: tekst)
             return
         }
         run(c, valg, tekst: tekst)
