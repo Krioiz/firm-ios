@@ -79,6 +79,7 @@ struct TodayCard: View {
     let d: JSON
     let loaded: Bool
     let failed: Bool
+    @ObservedObject private var runde = RundeModel.shared
 
     /// Zeros with the real shape: the skeleton is the card itself, redacted, so nothing jumps.
     private static let placeholder: JSON = {
@@ -101,7 +102,17 @@ struct TodayCard: View {
 
     private func content(_ d: JSON) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Det har systemet klaret i dag").font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
+            HStack(spacing: Theme.s1) {
+                Text("Det har systemet klaret i dag").font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
+                Spacer(minLength: 0)
+                // The approval round: drafts waiting for Marco's swipe (Runde in the quick actions opens them).
+                if runde.antal > 0 {
+                    Text("\(runde.antal) udkast venter").font(Theme.sans(11, .semibold)).foregroundStyle(Theme.tile)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Theme.tile.opacity(0.12), in: Capsule())
+                        .accessibilityLabel("\(runde.antal) udkast venter i runden")
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(d["klaret_i_dag"].int ?? 0)").font(Theme.mono(44, .medium)).monospacedDigit().foregroundStyle(Theme.ink)
                     .contentTransition(.numericText())
