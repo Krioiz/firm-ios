@@ -130,11 +130,19 @@ final class Push: NSObject, UIApplicationDelegate, UNUserNotificationCenterDeleg
     }
 
     var available: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
+    /// The Face ID sheet itself makes the app inactive and active again; without this the return to
+    /// .active asked a second time while the first answer was still on its way.
+    private var asking = false
 
     func unlock() {
+        guard !asking else { return }
+        asking = true
         let ctx = LAContext()
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Lås Kaneo ACT op") { ok, _ in
-            Task { @MainActor in if ok { self.locked = false } }
+            Task { @MainActor in
+                self.asking = false
+                if ok { self.locked = false }
+            }
         }
     }
 
@@ -275,7 +283,7 @@ struct MainTabs: View {
         }
         .tabBarMinimizeIfAvailable()
 
-        .task { Push.shared.ask(); await store.load() }
+        .task { Push.shared?.ask(); await store.load() }
         .onChange(of: router.stamp) { _, _ in Task { await store.load() } }
     }
 }
@@ -306,13 +314,16 @@ struct MainTabs: View {
             async let a = API.shared.get("api/alle")
             overblik = try await o; alle = try await a.array
             error = nil
+        } catch let e where e.isCancellation {
         } catch { self.error = error.localizedDescription }
         loaded = true
         updateBadge()
     }
 
     func loadToday() async {
-        do { idag = try await API.shared.get("api/app/idag"); idagFailed = false } catch { idagFailed = true }
+        do { idag = try await API.shared.get("api/app/idag"); idagFailed = false }
+        catch let e where e.isCancellation {}
+        catch { idagFailed = idag.isNull }   // keep the last numbers on a failed refresh
         idagLoaded = true
     }
 

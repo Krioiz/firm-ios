@@ -21,6 +21,7 @@ import UIKit
             let d = try await API.shared.get("api/svarvagt")
             if let nu = d["nu"].date { skew = nu.timeIntervalSinceNow }
             data = d; error = nil
+        } catch let e where e.isCancellation {
         } catch { self.error = error.localizedDescription }
         loaded = true
     }
@@ -52,6 +53,8 @@ struct CountdownPill: View {
                 .foregroundStyle(left < 0 ? Theme.bad : left < 180 ? Theme.warn : Theme.sec)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background((left < 0 ? Theme.bad : left < 180 ? Theme.warn : Theme.sec).opacity(0.12), in: Capsule())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(left < 0 ? "Svarfristen er overskredet med \(a / 60) min." : "\(a / 60) min. til svarfristen")
             }
         }
     }
@@ -160,6 +163,7 @@ struct Initials: View {
             .font(Theme.sans(size * 0.36, .semibold)).foregroundStyle(Color.dyn(0x585858, 0xd4d4d4))
             .frame(width: size, height: size)
             .background(LinearGradient(colors: [Color.dyn(0xf0f0f0, 0x262626), Color.dyn(0xe6e6e6, 0x181818)], startPoint: .top, endPoint: .bottom), in: Circle())
+            .accessibilityHidden(true)   // the name always stands next to it
     }
 }
 

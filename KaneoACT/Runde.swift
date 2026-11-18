@@ -13,12 +13,15 @@ import SwiftUI
     @Published var taeller: JSON = .null
     @Published var loaded = false
     @Published var error: String?
+    /// Sources the server could not read this time (GET /api/app/runde "fejl"): the deck is then not complete.
+    @Published var fejl: [String] = []
     @Published var busy = false
     /// Set after the first confirmed send; lives until the app is closed.
     var confirmed = false
 
     func load() async {
         do { apply(try await API.shared.get("api/app/runde")); error = nil }
+        catch let e where e.isCancellation {}
         catch { self.error = error.localizedDescription }
         loaded = true
     }
@@ -29,10 +32,12 @@ import SwiftUI
         antal = d["antal"].int ?? kort.count
         minutter = d["minutter"].int ?? 0
         taeller = d["taeller"]
+        fejl = d["fejl"].object.keys.sorted()
     }
 
     /// valg: send, ret, afvis, skip. True when the server took it.
     func choose(_ c: JSON, _ valg: String, tekst: String? = nil) async -> Bool {
+        guard !busy else { return false }
         busy = true
         defer { busy = false }
         var b: [String: Any] = ["valg": valg, "bekraeft": true]
@@ -53,8 +58,9 @@ import SwiftUI
             Router.shared.changed()
             return true
         } catch {
-            kort = before
-            Haptic.fail(); Toast.shared.show(error.localizedDescription, seconds: 3.5)
+            // 409: settled elsewhere (the web page, Neo, a second tap). Nothing failed; the deck just moves on.
+            if (error as? APIError)?.status == 409 { Toast.shared.show(error.localizedDescription) }
+            else { kort = before; Haptic.fail(); Toast.shared.show(error.localizedDescription, seconds: 3.5) }
             await load()
             return false
         }
@@ -83,13 +89,16 @@ struct RundeView: View {
                 if !m.loaded {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let c = m.kort.first {
+                    if let e = m.error { ErrorLine(text: e) }
+                    if !m.fejl.isEmpty { missing }
                     deck(c)
                     buttons(c)
-                    Text("Højre: \(c["hoejre"].string ?? "send") · venstre: afvis · op: senere · tryk: ret")
+                    Text("Højre: \((c["hoejre"].string ?? "send").lowercased()) · venstre: afvis · op: senere · tryk: ret")
                         .font(Theme.meta).foregroundStyle(Theme.dim).frame(maxWidth: .infinity)
                         .padding(.bottom, Theme.s1)
                 } else {
                     if let e = m.error { ErrorLine(text: e) }
+                    if !m.fejl.isEmpty { missing }
                     EmptyState(icon: "checkmark", title: "Runden er tom", text: "Der venter ingen udkast lige nu.")
                         .frame(maxHeight: .infinity)
                 }
@@ -98,7 +107,8 @@ struct RundeView: View {
             .background(Theme.bg.ignoresSafeArea())
             .navigationTitle("Runde").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Færdig") { dismiss() }.font(Theme.button) }
+                // Grey-scale like every other sheet: orange text on white is too weak to read.
+                ToolbarItem(placement: .confirmationAction) { Button("Færdig") { dismiss() }.font(Theme.button).tint(Theme.accent) }
             }
             .task { await m.load() }
             .sheet(item: $editing) { w in
@@ -116,6 +126,10 @@ struct RundeView: View {
             }
         }
         .tint(Theme.tile)
+    }
+
+    private var missing: some View {
+        Banner(title: "Ikke alt kom med.", text: "Kunne ikke hente " + m.fejl.map(RundeCard.kildeNavn).joined(separator: ", ") + ". Prøv igen om lidt.", tone: .warn)
     }
 
     // MARK: header: what waits, and how far the next training is
@@ -157,6 +171,7 @@ struct RundeView: View {
                     DragGesture(minimumDistance: 14)
                         .onChanged { g in if !m.busy { drag = g.translation } }
                         .onEnded { g in
+                            guard !m.busy else { return }
                             let w = g.translation.width, h = g.translation.height
                             if h < -110 && abs(h) > abs(w) { act(c, "skip") }
                             else if w > 110 { act(c, "send") }
@@ -186,6 +201,7 @@ struct RundeView: View {
 
     // MARK: actions
     private func act(_ c: JSON, _ valg: String, tekst: String? = nil) {
+        guard !m.busy else { return }
         if (valg == "send" || valg == "ret") && c["sender"].bool && !m.confirmed {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { drag = .zero }
             pending = RundePending(c: c, valg: valg, tekst: tekst)
@@ -212,10 +228,11 @@ struct RundeCard: View {
     let drag: CGSize
     let edit: () -> Void
 
-    private var kildeNavn: String {
+    static func kildeNavn(_ k: String) -> String {
         ["svarvagt": "Svarvagt · mail", "betalingsvagt": "Betalingsvagt · rykker", "sms": "SMS-bro", "nykunde": "Ny kunde",
-         "linkedin": "LinkedIn", "fakturatjek": "Fakturatjek"][c["kilde"].text] ?? c["kilde"].text
+         "linkedin": "LinkedIn", "fakturatjek": "Fakturatjek"][k] ?? k
     }
+    private var kildeNavn: String { Self.kildeNavn(c["kilde"].text) }
     private var sprog: String { ["da": "dansk", "en": "engelsk"][c["sprog"].text] ?? c["sprog"].text }
 
     var body: some View {
@@ -266,6 +283,10 @@ struct RundeCard: View {
             ForEach(c["tjek"].array.prefix(3), id: \.self) { t in
                 Label(clean(t.text), systemImage: "exclamationmark.triangle").font(Theme.meta).foregroundStyle(Theme.warn).lineLimit(2)
             }
+            // LinkedIn and Fakturatjek: what left means here (LinkedIn blacklists the person).
+            if let a = c["afvis_tekst"].string, !a.isEmpty {
+                Label(clean(a), systemImage: "arrow.left").font(Theme.meta).foregroundStyle(Theme.dim).lineLimit(2)
+            }
             Spacer(minLength: 0)
         }
         .padding(Theme.s3)
@@ -288,9 +309,9 @@ struct RundeCard: View {
         let amount = up ? -drag.height : abs(drag.width)
         if amount > 20 {
             Text(up ? "SENERE" : drag.width > 0 ? (c["sender"].bool ? "SEND" : "OK") : "AFVIS")
-                .font(Theme.sans(13, .bold)).foregroundStyle(.white)
+                .font(Theme.sans(14, .bold)).foregroundStyle(.white)
                 .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(up ? Color.gray : drag.width > 0 ? Theme.tile : Theme.badSolid, in: RoundedRectangle(cornerRadius: 7))
+                .background(up ? Color(hex: 0x585858) : drag.width > 0 ? Theme.tileStrong : Theme.badSolid, in: RoundedRectangle(cornerRadius: 7))
                 .opacity(min(1, Double(amount) / 100))
                 .padding(Theme.s3)
         }
@@ -346,6 +367,8 @@ struct RundeEdit: View {
 
     var body: some View {
         let maks = c["maks_tegn"].int
+        // The server counts like Python's len(): Unicode scalars, not what the eye sees as one character.
+        let count = text.unicodeScalars.count
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         NavigationStack {
             VStack(alignment: .leading, spacing: Theme.s2) {
@@ -360,22 +383,22 @@ struct RundeEdit: View {
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.line, lineWidth: 1))
                 if let maks {
-                    Text("\(text.count) af \(maks) tegn").font(Theme.meta).foregroundStyle(text.count > maks ? Theme.bad : Theme.dim)
+                    Text("\(count) af \(maks) tegn").font(Theme.meta).foregroundStyle(count > maks ? Theme.bad : Theme.dim)
                 }
             }
             .padding(Theme.s3)
             .background(Theme.bg.ignoresSafeArea())
             .navigationTitle("Ret udkast").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Annullér") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Annullér") { dismiss() }.tint(Theme.accent) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(c["sender"].bool ? "Send" : "Gem") {
                         let t = trimmed
                         dismiss()
                         Task { try? await Task.sleep(nanoseconds: 350_000_000); done(t) }
                     }
-                    .font(Theme.button)
-                    .disabled(trimmed.isEmpty || (maks.map { text.count > $0 } ?? false))
+                    .font(Theme.button).tint(Theme.accent)
+                    .disabled(trimmed.isEmpty || (maks.map { count > $0 } ?? false))
                 }
             }
             .onAppear { text = c["udkast"].text; focused = true }

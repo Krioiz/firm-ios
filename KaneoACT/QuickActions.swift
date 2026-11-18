@@ -95,6 +95,7 @@ enum QuickAsk: String, Identifiable { case leads, pause; var id: String { rawVal
 struct QuickGrid: View {
     @AppStorage("quick.order") private var stored = ""
     @ObservedObject private var store = Store.shared
+    @ObservedObject private var runde = RundeModel.shared
 
     private var order: [QuickAction] {
         var o = stored.split(separator: ",").compactMap { QuickAction(rawValue: String($0)) }
@@ -125,6 +126,8 @@ struct QuickGrid: View {
                             return true
                         }
                         .accessibilityLabel(a == .pause && paused ? "Genoptag alle agenter" : a.spoken)
+                        // The badge sits inside the button's label, which VoiceOver replaces: say the count here.
+                        .accessibilityValue(a == .runde && runde.antal > 0 ? "\(runde.antal) udkast venter" : "")
                         .accessibilityHint("Hold og træk for at flytte")
                 }
             }
@@ -180,9 +183,8 @@ struct QuickCircle: View {
                 if a == .runde && runde.antal > 0 {
                     Text("\(runde.antal)").font(Theme.mono(11, .semibold)).monospacedDigit().foregroundStyle(.white)
                         .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
-                        .background(Theme.tile, in: Capsule())
+                        .background(Theme.tileStrong, in: Capsule())
                         .offset(x: 4, y: -2)
-                        .accessibilityLabel("\(runde.antal) udkast venter")
                 }
             }
             Text(a == .pause && paused ? "Genoptag" : a.title)
@@ -362,16 +364,21 @@ struct ScanReceipt: UIViewControllerRepresentable {
     }
 
     @MainActor static func upload(_ img: UIImage) async {
-        // Keep it well under the server's 10 MB: scale the long side to 2400 px.
-        let maxSide: CGFloat = 2400
-        let s = min(1, maxSide / max(img.size.width, img.size.height))
-        let size = CGSize(width: img.size.width * s, height: img.size.height * s)
-        let scaled = UIGraphicsImageRenderer(size: size).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
-        guard let jpg = scaled.jpegData(compressionQuality: 0.8) else { return }
         Toast.shared.show("Kvitteringen sendes til Bilag")
+        // Scaling a 12 MP photo, the JPEG and the base64 take a moment: off the main thread, so the UI stays live.
+        let b64: String? = await Task.detached(priority: .userInitiated) {
+            // Keep it well under the server's 10 MB: scale the long side to 2400 px.
+            let maxSide: CGFloat = 2400
+            let s = min(1, maxSide / max(img.size.width, img.size.height, 1))
+            let size = CGSize(width: img.size.width * s, height: img.size.height * s)
+            let f = UIGraphicsImageRendererFormat(); f.scale = 1
+            let scaled = UIGraphicsImageRenderer(size: size, format: f).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+            return scaled.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+        }.value
+        guard let b64 else { Haptic.fail(); Toast.shared.show("Billedet kunne ikke læses. Prøv igen."); return }
         do {
             let name = "kvittering-\(Int(Date().timeIntervalSince1970)).jpg"
-            try await API.shared.send("api/bilag/upload", ["navn": name, "data": jpg.base64EncodedString()])
+            try await API.shared.send("api/bilag/upload", ["navn": name, "data": b64])
             Haptic.approve(); Toast.shared.show("Kvitteringen er i Bilag og læses nu")
             await Store.shared.load()
         } catch { Haptic.fail(); Toast.shared.show("Kvitteringen blev ikke sendt. \(error.localizedDescription)") }

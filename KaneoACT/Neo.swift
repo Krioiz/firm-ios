@@ -154,6 +154,7 @@ struct NeoView: View {
                             }
                         }
                     } label: { Image(systemName: "clock") }
+                    .accessibilityLabel("Samtaler")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -162,9 +163,11 @@ struct NeoView: View {
                             Text("Reserve").tag("reserve"); Text("Lokal").tag("lokal")
                         }
                     } label: { Text(m.mode.capitalized).font(Theme.sans(14, .medium)) }
+                    .accessibilityLabel("Tilstand: \(m.mode)")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await m.open(nil) } } label: { Image(systemName: "square.and.pencil") }
+                        .accessibilityLabel("Ny samtale")
                 }
             }
             .task {
@@ -177,21 +180,34 @@ struct NeoView: View {
             .onChange(of: photo) { _, item in
                 guard let item else { return }
                 Task {
-                    if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) {
-                        let jpg = img.jpegData(compressionQuality: 0.85) ?? d
+                    // Decoding and re-encoding a photo is heavy: off the main thread.
+                    if let d = try? await item.loadTransferable(type: Data.self),
+                       case let (jpg, img)? = await Task.detached(priority: .userInitiated, operation: { () -> (Data, UIImage)? in
+                           guard let img = UIImage(data: d) else { return nil }
+                           return (img.jpegData(compressionQuality: 0.85) ?? d, img.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? img)
+                       }).value {
                         m.attach(jpg, name: "billede-\(Int(Date().timeIntervalSince1970)).jpg", mime: "image/jpeg", image: img)
+                    } else {
+                        Toast.shared.show("Billedet kunne ikke hentes")
                     }
                     photo = nil
                 }
             }
             .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { r in
                 guard case .success(let urls) = r else { return }
-                for u in urls.prefix(10) {
-                    let ok = u.startAccessingSecurityScopedResource()
-                    defer { if ok { u.stopAccessingSecurityScopedResource() } }
-                    if let d = try? Data(contentsOf: u) {
-                        let mime = UTType(filenameExtension: u.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                        m.attach(d, name: u.lastPathComponent, mime: mime, image: mime.hasPrefix("image/") ? UIImage(data: d) : nil)
+                // Up to 10 files of 25 MB: read them off the main thread, then attach.
+                Task {
+                    for u in urls.prefix(10) {
+                        let got = await Task.detached(priority: .userInitiated) { () -> (Data, String, UIImage?)? in
+                            let ok = u.startAccessingSecurityScopedResource()
+                            defer { if ok { u.stopAccessingSecurityScopedResource() } }
+                            guard let d = try? Data(contentsOf: u) else { return nil }
+                            let mime = UTType(filenameExtension: u.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+                            let thumb = mime.hasPrefix("image/") ? UIImage(data: d)?.preparingThumbnail(of: CGSize(width: 120, height: 120)) : nil
+                            return (d, mime, thumb)
+                        }.value
+                        if case let (d, mime, thumb)? = got { m.attach(d, name: u.lastPathComponent, mime: mime, image: thumb) }
+                        else { Toast.shared.show("\(u.lastPathComponent) kunne ikke læses") }
                     }
                 }
             }
@@ -255,7 +271,11 @@ struct NeoView: View {
                                 Text(f.navn).font(Theme.meta).foregroundStyle(Theme.ink).lineLimit(1).frame(maxWidth: 120)
                                 if f.uploading { ProgressView().controlSize(.mini) }
                                 if f.fejl != nil { Dot(tone: .bad) }
-                                Button { m.files.removeAll { $0.id == f.id } } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.dim) }
+                                Button { m.files.removeAll { $0.id == f.id } } label: {
+                                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.dim)
+                                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                                }
+                                .accessibilityLabel("Fjern \(f.navn)")
                             }
                             .padding(.horizontal, 10).padding(.vertical, 6).background(Theme.raised, in: Capsule())
                         }

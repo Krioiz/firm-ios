@@ -46,29 +46,39 @@ enum JSON: Decodable, Hashable {
 }
 
 enum ACTDate {
+    private static let cph = TimeZone(identifier: "Europe/Copenhagen")
     private static let full: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
     private static let plain: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f }()
-    private static let day: DateFormatter = { let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "Europe/Copenhagen"); f.dateFormat = "yyyy-MM-dd"; return f }()
+    private static func fmt(_ p: String, _ loc: String = "en_US_POSIX") -> DateFormatter {
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: loc); f.timeZone = cph; f.dateFormat = p; return f
+    }
+    private static let day = fmt("yyyy-MM-dd")
+    private static let local = [fmt("yyyy-MM-dd'T'HH:mm:ss.SSSSSS"), fmt("yyyy-MM-dd'T'HH:mm:ss")]
+    private static let short = fmt("d. MMM", "da_DK")
+    private static let clock = fmt("HH:mm", "da_DK")
+    /// Python's isoformat writes six decimals ("...:33.123456+00:00"); cut to three before the ISO parser.
+    private static let micro = try? NSRegularExpression(pattern: "(\\.\\d{3})\\d+")
 
+    // Formatters are built once: a list of rows used to build several per row on every render.
     static func parse(_ s: String) -> Date? {
         if let d = full.date(from: s) ?? plain.date(from: s) { return d }
+        if let re = micro {
+            let t = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1")
+            if t != s, let d = full.date(from: t) { return d }
+        }
         // Python's isoformat without a zone, or a bare date
         if s.count == 10 { return day.date(from: s) }
-        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "Europe/Copenhagen")
-        for p in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] { f.dateFormat = p; if let d = f.date(from: s) { return d } }
+        for f in local { if let d = f.date(from: s) { return d } }
         return nil
     }
     static func dayText(_ d: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "da_DK"); f.timeZone = TimeZone(identifier: "Europe/Copenhagen")
         let cal = Calendar.current
         if cal.isDateInToday(d) { return "i dag" }
         if cal.isDateInTomorrow(d) { return "i morgen" }
         if cal.isDateInYesterday(d) { return "i går" }
-        f.dateFormat = "d. MMM"; return f.string(from: d)
+        return short.string(from: d)
     }
-    static func time(_ d: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "da_DK"); f.dateFormat = "HH:mm"; return f.string(from: d)
-    }
+    static func time(_ d: Date) -> String { clock.string(from: d) }
     static func ago(_ d: Date) -> String {
         let s = Int(Date().timeIntervalSince(d))
         if s < 60 { return "lige nu" }
@@ -113,6 +123,26 @@ struct APIError: LocalizedError {
     let status: Int
     let message: String
     var errorDescription: String? { message }
+
+    /// URLSession's own errors come in the phone's language and mean little to Marco: say it in Danish.
+    /// A cancelled request (pull to refresh let go, the screen closed) stays a cancellation.
+    static func from(_ e: Error) -> Error {
+        guard let u = e as? URLError else { return e }
+        switch u.code {
+        case .cancelled: return CancellationError()
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
+            return APIError(status: 0, message: "Ingen forbindelse. Prøv igen, når telefonen er online.")
+        case .timedOut: return APIError(status: 0, message: "ACT svarede ikke i tide. Prøv igen.")
+        case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .secureConnectionFailed:
+            return APIError(status: 0, message: "ACT kan ikke nås lige nu. Prøv igen om lidt.")
+        default: return APIError(status: 0, message: "Netværksfejl. Prøv igen.")
+        }
+    }
+}
+
+extension Error {
+    /// Not worth a red line: the request was called off, not refused.
+    var isCancellation: Bool { self is CancellationError || (self as? URLError)?.code == .cancelled }
 }
 
 @MainActor final class API: ObservableObject {
@@ -131,12 +161,20 @@ struct APIError: LocalizedError {
         self.token = token; self.email = email; self.name = name; self.expires = expires
         let d = UserDefaults.standard
         d.set(email, forKey: "email"); d.set(name, forKey: "name"); d.set(expires, forKey: "expires")
-        Push.shared.uploadPending()
+        Push.shared?.uploadPending()
     }
 
     /// Forget the token here. The server copy is deleted by logout(); a 401 means it is already gone.
     func forget() {
         Keychain.delete("token"); token = nil
+    }
+
+    /// Every call goes through here, so network errors are Danish everywhere.
+    static func wrap<T>(_ f: () async throws -> T) async throws -> T {
+        do { return try await f() } catch { throw APIError.from(error) }
+    }
+    private func load(_ r: URLRequest) async throws -> (Data, URLResponse) {
+        try await API.wrap { try await URLSession.shared.data(for: r) }
     }
 
     func logout() async {
@@ -150,7 +188,11 @@ struct APIError: LocalizedError {
     }
 
     private func request(_ path: String, method: String = "GET", json: Any? = nil) -> URLRequest {
-        var r = URLRequest(url: URL(string: path, relativeTo: API.base)!.absoluteURL)
+        // A path with a space or æøå (an agent's name) is encoded instead of crashing on a nil URL.
+        let url = URL(string: path, relativeTo: API.base)?.absoluteURL
+            ?? path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed).flatMap { URL(string: $0, relativeTo: API.base)?.absoluteURL }
+            ?? API.base
+        var r = URLRequest(url: url)
         r.httpMethod = method
         r.timeoutInterval = 60
         if let t = token { r.setValue("Bearer " + t, forHTTPHeaderField: "Authorization") }
@@ -172,20 +214,20 @@ struct APIError: LocalizedError {
     }
 
     func get(_ path: String) async throws -> JSON {
-        let (d, r) = try await URLSession.shared.data(for: request(path))
+        let (d, r) = try await load(request(path))
         try check(d, r)
         return JSON.parse(d) ?? .null
     }
 
     @discardableResult
     func send(_ path: String, method: String = "POST", _ body: [String: Any] = [:]) async throws -> JSON {
-        let (d, r) = try await URLSession.shared.data(for: request(path, method: method, json: body))
+        let (d, r) = try await load(request(path, method: method, json: body))
         try check(d, r)
         return JSON.parse(d) ?? .null
     }
 
     func download(_ path: String) async throws -> (Data, String?) {
-        let (d, r) = try await URLSession.shared.data(for: request(path))
+        let (d, r) = try await load(request(path))
         try check(d, r)
         return (d, (r as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"))
     }
@@ -201,7 +243,7 @@ struct APIError: LocalizedError {
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"fil\"; filename=\"\(safe)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
         body.append(data)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-        let (d, resp) = try await URLSession.shared.upload(for: r, from: body)
+        let (d, resp) = try await API.wrap { try await URLSession.shared.upload(for: r, from: body) }
         try check(d, resp)
         return JSON.parse(d) ?? .null
     }
@@ -221,7 +263,7 @@ struct APIError: LocalizedError {
                         if let j = JSON.parse(Data(line.utf8)) { cont.yield(j) }
                     }
                     cont.finish()
-                } catch { cont.finish(throwing: error) }
+                } catch { cont.finish(throwing: APIError.from(error)) }
             }
             cont.onTermination = { _ in task.cancel() }
         }
@@ -278,7 +320,7 @@ final class WebLogin: NSObject, ASWebAuthenticationPresentationContextProviding 
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: ["code": code, "verifier": verifier])
-        let (d, resp) = try await URLSession.shared.data(for: r)
+        let (d, resp) = try await API.wrap { try await URLSession.shared.data(for: r) }
         let j = JSON.parse(d) ?? .null
         guard (resp as? HTTPURLResponse)?.statusCode == 200, let tok = j["token"].string else {
             throw APIError(status: (resp as? HTTPURLResponse)?.statusCode ?? 0, message: j["detail"].string ?? "Login fejlede")
@@ -295,6 +337,8 @@ final class WebLogin: NSObject, ASWebAuthenticationPresentationContextProviding 
     private var task: Task<Void, Never>?
     func show(_ t: String, undo: (() -> Void)? = nil, seconds: Double = 2.2) {
         text = t; self.undo = undo; task?.cancel()
+        // VoiceOver hears the toast too; with "Fortryd" it says how to undo.
+        UIAccessibility.post(notification: .announcement, argument: undo == nil ? t : t + ". Fortryd findes nederst på skærmen.")
         task = Task {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             if !Task.isCancelled { text = nil; self.undo = nil }

@@ -78,7 +78,9 @@ struct MoreView: View {
     @Published var loaded = false
     init(_ path: String) { self.path = path }
     func load() async {
-        do { data = try await API.shared.get(path); error = nil } catch { self.error = error.localizedDescription }
+        do { data = try await API.shared.get(path); error = nil }
+        catch let e where e.isCancellation {}
+        catch { self.error = error.localizedDescription }
         loaded = true
     }
     @discardableResult
@@ -441,6 +443,7 @@ struct EconomyView: View {
                     if busy { ProgressView() } else { Image(systemName: "arrow.clockwise") }
                 }
                 .disabled(busy)
+                .accessibilityLabel("Hent tallene fra Dinero igen")
             }
         }
         .task { await l.load() }
@@ -498,7 +501,7 @@ struct SettingsView: View {
             status = (try? await API.shared.get("api/app/status")) ?? .null
             let s = await UNUserNotificationCenter.current().notificationSettings()
             notif = s.authorizationStatus == .authorized ? "Tilladt" : s.authorizationStatus == .denied ? "Slået fra" : "Ikke spurgt"
-            if s.authorizationStatus == .authorized { Push.shared.ask() }
+            if s.authorizationStatus == .authorized { Push.shared?.ask() }
         }
     }
 }

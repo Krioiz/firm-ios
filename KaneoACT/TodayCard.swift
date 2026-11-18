@@ -107,7 +107,7 @@ struct TodayCard: View {
                 Spacer(minLength: 0)
                 // The approval round: drafts waiting for Marco's swipe (Runde in the quick actions opens them).
                 if runde.antal > 0 {
-                    Text("\(runde.antal) udkast venter").font(Theme.sans(11, .semibold)).foregroundStyle(Theme.tile)
+                    Text("\(runde.antal) udkast venter").font(Theme.sans(11, .semibold)).foregroundStyle(Theme.tileText)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Theme.tile.opacity(0.12), in: Capsule())
                         .accessibilityLabel("\(runde.antal) udkast venter i runden")

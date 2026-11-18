@@ -118,7 +118,8 @@ extension Store {
     static let bilagLoader = Loader("api/bilag")
 
     var items: [WaitItem] {
-        let mails = MailModel.shared.open
+        // "sender" (already on its way out) is in the Mail list but has nothing left to do: sending it again gave 409.
+        let mails = MailModel.shared.open.filter { $0["status"].text == "venter" }
         let mailItemIds = Set(mails.compactMap { $0["item_id"].string })
         let decisionIds = Set(decisions.map { $0["id"].text })
         var out: [WaitItem] = []
@@ -443,6 +444,8 @@ struct WaitRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(it.kindName). \(it.title). \(subline)")
         .accessibilityAction(named: "Åbn", open)
+        // The button on the right is merged into the row for VoiceOver; its action has to be offered here.
+        .modifier(PrimaryAction(name: it.primary, run: run))
         .accessibilityAction(named: "Spørg Neo om dette") { Act.askNeo(it) }
     }
 
@@ -495,6 +498,14 @@ struct WaitRow: View {
         Button(role: it.kind == .frist ? nil : .destructive) { Act.secondary(it) } label: {
             Label(it.secondary, systemImage: it.kind == .frist ? "clock.arrow.circlepath" : "xmark")
         }
+    }
+}
+
+private struct PrimaryAction: ViewModifier {
+    let name: String?
+    let run: () -> Void
+    @ViewBuilder func body(content: Content) -> some View {
+        if let name { content.accessibilityAction(named: Text(name), run) } else { content }
     }
 }
 

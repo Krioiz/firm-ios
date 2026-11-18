@@ -41,6 +41,10 @@ enum Theme {
     static let badSolid = Color(hex: 0xc62f2a)
     // The app's tile colour, for the K tile only
     static let tile = Color(hex: 0xFE5C25)
+    /// The same orange, deeper, where small white text sits on it (badges, stamps): #FE5C25 gives white only 3.1:1.
+    static let tileStrong = Color(hex: 0xC2410C)
+    /// Orange as text (the "udkast venter" chip): readable on white and on black.
+    static let tileText = Color.dyn(0xB93C0A, 0xFF8A5C)
 
     // Spacing scale 8 / 12 / 16 / 24
     static let s1: CGFloat = 8, s2: CGFloat = 12, s3: CGFloat = 16, s4: CGFloat = 24
@@ -333,6 +337,7 @@ struct RowIcon: View {
             Image(systemName: symbol).font(.system(size: 14, weight: .regular)).foregroundStyle(tone)
         }
         .frame(width: Self.size, height: Self.size)
+        .accessibilityHidden(true)
     }
 }
 
@@ -376,10 +381,18 @@ func markdown(_ s: String) -> AttributedString {
     (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
 }
 
+private let daFormatters: [Int: NumberFormatter] = Dictionary(uniqueKeysWithValues: (0...2).map { n in
+    let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal
+    f.maximumFractionDigits = n; f.minimumFractionDigits = n
+    return (n, f)
+})
+
 func daNumber(_ v: Double?, decimals: Int = 0) -> String {
     guard let v else { return "-" }
-    let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal
-    f.maximumFractionDigits = decimals; f.minimumFractionDigits = decimals
+    let f = daFormatters[decimals] ?? {
+        let f = NumberFormatter(); f.locale = Locale(identifier: "da_DK"); f.numberStyle = .decimal
+        f.maximumFractionDigits = decimals; f.minimumFractionDigits = decimals; return f
+    }()
     return f.string(from: NSNumber(value: v)) ?? "\(v)"
 }
 
